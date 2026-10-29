@@ -43,12 +43,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9011/health/')"]
-      interval: 10s
-      timeout: 5s
-      retries: 30
-      start_period: 300s
     restart: unless-stopped
 
   worker:
@@ -61,7 +55,7 @@ services:
       - ./data:/app/data
     depends_on:
       web:
-        condition: service_healthy
+        condition: service_started
       redis:
         condition: service_healthy
     restart: unless-stopped
@@ -74,7 +68,7 @@ services:
     environment: *platform-env
     depends_on:
       web:
-        condition: service_healthy
+        condition: service_started
       redis:
         condition: service_healthy
     restart: unless-stopped
@@ -85,14 +79,14 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL: ${DATABASE_URL:-postgres://nse:nse@db:5432/nse}
     volumes:
       - ./data:/app/data
     ports:
       - "9010:9010"
     depends_on:
       web:
-        condition: service_healthy
+        condition: service_started
     restart: unless-stopped
 
 volumes:
