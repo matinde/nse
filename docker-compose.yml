@@ -2,13 +2,13 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-nse}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nse}
-      POSTGRES_DB: ${POSTGRES_DB:-nse}
+      POSTGRES_USER: nse
+      POSTGRES_PASSWORD: nse
+      POSTGRES_DB: nse
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - nse_pg:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      test: ["CMD-SHELL", "pg_isready -U nse -d nse"]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -29,9 +29,9 @@ services:
       - .env
     environment: &platform-env
       PORT: "9011"
-      POSTGRES_USER: ${POSTGRES_USER:-nse}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nse}
-      POSTGRES_DB: ${POSTGRES_DB:-nse}
+      POSTGRES_USER: nse
+      POSTGRES_PASSWORD: nse
+      POSTGRES_DB: nse
       POSTGRES_HOST: db
       POSTGRES_PORT: "5432"
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-dev-only-change-me}
@@ -83,9 +83,9 @@ services:
     env_file:
       - .env
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-nse}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nse}
-      POSTGRES_DB: ${POSTGRES_DB:-nse}
+      POSTGRES_USER: nse
+      POSTGRES_PASSWORD: nse
+      POSTGRES_DB: nse
       POSTGRES_HOST: db
       POSTGRES_PORT: "5432"
     volumes:
@@ -98,4 +98,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  postgres_data:
+  nse_pg:
