@@ -13,6 +13,7 @@ RUN pip install --upgrade pip && \
 
 COPY platform/ .
 COPY data/ /app/seed-data/
+COPY app.py /app/app.py
 
 EXPOSE 9011
 

@@ -45,6 +45,7 @@ services:
       - ./data:/app/data
     ports:
       - "9011:9011"
+      - "9012:9012"
     depends_on:
       db:
         condition: service_healthy
@@ -82,25 +83,6 @@ services:
         condition: service_started
       redis:
         condition: service_healthy
-    restart: unless-stopped
-
-  nse-app:
-    build: .
-    env_file:
-      - .env
-    environment:
-      POSTGRES_USER: nse
-      POSTGRES_PASSWORD: nse
-      POSTGRES_DB: nse
-      POSTGRES_HOST: db
-      POSTGRES_PORT: "5432"
-    volumes:
-      - ./data:/app/data
-    ports:
-      - "9010:9010"
-    depends_on:
-      web:
-        condition: service_started
     restart: unless-stopped
 
 volumes:

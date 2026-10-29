@@ -112,7 +112,12 @@ for _piece in _csrf_raw.split(","):
     _cleaned = _origin(_piece)
     if _cleaned and _cleaned not in _csrf_origins:
         _csrf_origins.append(_cleaned)
-for _local in ("http://localhost:9011", "http://127.0.0.1:9011"):
+for _local in (
+    "http://localhost:9011",
+    "http://127.0.0.1:9011",
+    "http://localhost:9012",
+    "http://127.0.0.1:9012",
+):
     if _local not in _csrf_origins:
         _csrf_origins.append(_local)
 CSRF_TRUSTED_ORIGINS = _csrf_origins

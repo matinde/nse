@@ -14,8 +14,8 @@ From this folder:
 
 `docker compose up --build`
 
-- Explorer: http://localhost:9010
-- Operator admin: http://localhost:9011/admin/ (create the account yourself with `python manage.py createsuperuser`)
+- Explorer: http://localhost:9011
+- Operator admin: http://localhost:9012/admin/ (create the account yourself with `python manage.py createsuperuser`)
 
 The explorer reads Postgres. On startup the web service imports every yearly CSV and every `data/NSE_{Month}_{Year}_prices.csv`. A Celery job appends each new session close to the current month file at 16:45 Africa/Nairobi on weekdays. `./data` is mounted into the containers, so October, November, and later month files stay on the host.
 
