@@ -6,8 +6,13 @@ from urllib.parse import urlparse
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "dev-only-change-me")
-DEBUG = os.environ.get("DJANGO_DEBUG", "False") == "True"
+def _setting(name, default):
+    value = os.environ.get(name, "").strip()
+    return value or default
+
+
+SECRET_KEY = _setting("DJANGO_SECRET_KEY", "dev-only-change-me")
+DEBUG = _setting("DJANGO_DEBUG", "False") == "True"
 ALLOWED_HOSTS = ["*"]
 
 INSTALLED_APPS = [
@@ -50,7 +55,7 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 
-_database_url = os.environ.get("DATABASE_URL", "postgres://nse:nse@db:5432/nse")
+_database_url = _setting("DATABASE_URL", "postgres://nse:nse@db:5432/nse")
 _db = urlparse(_database_url)
 DATABASES = {
     "default": {
@@ -94,10 +99,10 @@ CSRF_TRUSTED_ORIGINS = [
     if origin.strip()
 ]
 
-DATA_DIR = Path(os.environ.get("DATA_DIR", BASE_DIR.parent / "data"))
+DATA_DIR = Path(_setting("DATA_DIR", "/app/data"))
 LIVE_FEED_START = "2026-10-28"
 
-CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://redis:6379/0")
+CELERY_BROKER_URL = _setting("CELERY_BROKER_URL", "redis://redis:6379/0")
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", CELERY_BROKER_URL)
 CELERY_TIMEZONE = TIME_ZONE
 CELERY_TASK_TRACK_STARTED = True
