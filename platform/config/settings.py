@@ -55,18 +55,34 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 
-_database_url = _setting("DATABASE_URL", "postgres://nse:nse@db:5432/nse")
-_db = urlparse(_database_url)
-DATABASES = {
-    "default": {
+def _database():
+    """Use POSTGRES_* so the app password is the one Postgres was created with.
+
+    A separate DATABASE_URL is only a fallback. Coolify fills POSTGRES_PASSWORD
+    on its own, and a hardcoded postgres://nse:nse@... URL then fails login.
+    """
+    password = os.environ.get("POSTGRES_PASSWORD", "").strip()
+    if password:
+        return {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": _setting("POSTGRES_DB", "nse"),
+            "USER": _setting("POSTGRES_USER", "nse"),
+            "PASSWORD": password,
+            "HOST": _setting("POSTGRES_HOST", "db"),
+            "PORT": _setting("POSTGRES_PORT", "5432"),
+        }
+    parsed = urlparse(_setting("DATABASE_URL", "postgres://nse:nse@db:5432/nse"))
+    return {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": _db.path.lstrip("/"),
-        "USER": _db.username,
-        "PASSWORD": _db.password,
-        "HOST": _db.hostname,
-        "PORT": _db.port or 5432,
+        "NAME": parsed.path.lstrip("/"),
+        "USER": parsed.username,
+        "PASSWORD": parsed.password,
+        "HOST": parsed.hostname,
+        "PORT": parsed.port or 5432,
     }
-}
+
+
+DATABASES = {"default": _database()}
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},

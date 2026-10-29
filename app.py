@@ -42,10 +42,19 @@ div[data-testid="stAlert"] { border-radius:12px; }
 """, unsafe_allow_html=True)
 
 def database_url():
+    from urllib.parse import quote_plus
+
+    password = os.environ.get("POSTGRES_PASSWORD", "").strip()
+    if password:
+        user = quote_plus(os.environ.get("POSTGRES_USER", "nse").strip() or "nse")
+        name = quote_plus(os.environ.get("POSTGRES_DB", "nse").strip() or "nse")
+        host = os.environ.get("POSTGRES_HOST", "db").strip() or "db"
+        port = os.environ.get("POSTGRES_PORT", "5432").strip() or "5432"
+        return f"postgresql+psycopg://{user}:{quote_plus(password)}@{host}:{port}/{name}"
     url = os.environ.get("DATABASE_URL", "").strip()
     if not url:
         raise RuntimeError(
-            "DATABASE_URL is not set. Start the stack with docker compose so the explorer can read Postgres."
+            "POSTGRES_PASSWORD is not set. Start the stack with docker compose so the explorer can read Postgres."
         )
     if url.startswith("postgres://"):
         return "postgresql+psycopg://" + url[len("postgres://"):]

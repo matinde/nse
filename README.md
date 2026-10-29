@@ -24,7 +24,7 @@ To pull today's close without waiting for the clock, after the stack is up:
 `docker compose exec web python manage.py fetch_closes`
 
 ## Run the explorer only
-The explorer needs `DATABASE_URL` pointing at the Postgres service started by Docker. Use `docker compose up --build` rather than `streamlit run` on its own.
+The explorer uses the same `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_DB` as the database container. Use `docker compose up --build` rather than `streamlit run` on its own.
 
 ## Data notes
 - Yearly files cover 2023, 2024, 2025 and January–June 2026. From October 2026 each month has its own CSV, named `NSE_{Month}_{Year}_prices.csv`.
