@@ -1,0 +1,7 @@
+Django==6.1.2
+celery>=5.4,<6
+redis>=5
+psycopg[binary]>=3.2
+requests>=2.32
+gunicorn>=23
+whitenoise>=6.7

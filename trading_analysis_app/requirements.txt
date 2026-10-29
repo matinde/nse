@@ -1,0 +1,11 @@
+Django
+djangorestframework
+chromadb
+python-dotenv
+pandas
+openpyxl
+pdfminer.six
+requests
+beautifulsoup4
+transformers
+torch
