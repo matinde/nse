@@ -41,7 +41,7 @@ class DailyPrice(models.Model):
                 name="uniq_symbol_trade_date",
             )
         ]
-        indexes = [models.Index(fields=["trade_date"])]
+        indexes = [models.Index(fields=["trade_date"], name="market_dp_trade_date_idx")]
         ordering = ["-trade_date", "symbol"]
 
     def __str__(self):

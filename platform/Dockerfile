@@ -7,11 +7,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
     DJANGO_SETTINGS_MODULE=config.settings
 
-COPY requirements.txt .
+COPY platform/requirements.txt .
 RUN pip install --upgrade pip && \
     pip install --retries 10 --timeout 120 -r requirements.txt
 
-COPY . .
+COPY platform/ .
+COPY data/ /app/seed-data/
 
 EXPOSE 9011
 

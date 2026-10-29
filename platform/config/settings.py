@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -87,14 +88,34 @@ STORAGES = {
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 SESSION_ENGINE = "django.contrib.sessions.backends.db"
 
-CSRF_TRUSTED_ORIGINS = [
-    origin.strip()
-    for origin in os.environ.get(
-        "CSRF_TRUSTED_ORIGINS",
-        "http://localhost:9011,http://127.0.0.1:9011",
-    ).split(",")
-    if origin.strip()
-]
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+USE_X_FORWARDED_HOST = True
+
+
+def _origin(value):
+    value = (value or "").strip().rstrip("/")
+    if not value:
+        return ""
+    if "://" not in value:
+        value = "https://" + value
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return ""
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+_csrf_origins = []
+_csrf_raw = os.environ.get("CSRF_TRUSTED_ORIGINS", "").strip()
+if not _csrf_raw:
+    _csrf_raw = "http://localhost:9011,http://127.0.0.1:9011"
+for _piece in _csrf_raw.split(","):
+    _cleaned = _origin(_piece)
+    if _cleaned and _cleaned not in _csrf_origins:
+        _csrf_origins.append(_cleaned)
+for _local in ("http://localhost:9011", "http://127.0.0.1:9011"):
+    if _local not in _csrf_origins:
+        _csrf_origins.append(_local)
+CSRF_TRUSTED_ORIGINS = _csrf_origins
 
 DATA_DIR = Path(_setting("DATA_DIR", "/app/data"))
 LIVE_FEED_START = "2026-10-28"

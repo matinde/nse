@@ -24,7 +24,9 @@ services:
     restart: unless-stopped
 
   web:
-    build: ./platform
+    build:
+      context: .
+      dockerfile: platform/Dockerfile
     env_file:
       - .env
     environment: &platform-env
@@ -37,7 +39,8 @@ services:
       DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-dev-only-change-me}
       DJANGO_DEBUG: ${DJANGO_DEBUG:-False}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
-      DATA_DIR: ${DATA_DIR:-/app/data}
+      DATA_DIR: /app/data
+      CSRF_TRUSTED_ORIGINS: ${SERVICE_URL_WEB_9011:-http://localhost:9011}
     volumes:
       - ./data:/app/data
     ports:
@@ -50,7 +53,9 @@ services:
     restart: unless-stopped
 
   worker:
-    build: ./platform
+    build:
+      context: .
+      dockerfile: platform/Dockerfile
     command: celery -A config worker --loglevel=info
     env_file:
       - .env
@@ -65,7 +70,9 @@ services:
     restart: unless-stopped
 
   beat:
-    build: ./platform
+    build:
+      context: .
+      dockerfile: platform/Dockerfile
     command: celery -A config beat --loglevel=info
     env_file:
       - .env
@@ -79,7 +86,6 @@ services:
 
   nse-app:
     build: .
-    container_name: nse-investment-explorer
     env_file:
       - .env
     environment:

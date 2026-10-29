@@ -51,7 +51,7 @@ class Migration(migrations.Migration):
                 ("volume", models.BigIntegerField(blank=True, null=True)),
                 ("day_low", models.DecimalField(blank=True, decimal_places=4, max_digits=14, null=True)),
                 ("day_high", models.DecimalField(blank=True, decimal_places=4, max_digits=14, null=True)),
-                ("source", models.CharField(max_length=16)),
+                ("source", models.CharField(choices=[("csv", "CSV"), ("board", "Board")], max_length=16)),
                 ("fetched_at", models.DateTimeField(auto_now=True)),
                 (
                     "symbol",
