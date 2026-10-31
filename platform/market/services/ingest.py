@@ -1,21 +1,11 @@
-import time
 from datetime import date
 
-import requests
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
 from market.models import DailyPrice, IngestRun, Symbol
-from market.services.afx import (
-    BOARD_URL,
-    HISTORY_URL,
-    BoardParseError,
-    SessionNotClosed,
-    fetch_html,
-    parse_board,
-    parse_history,
-)
+from market.services.afx import BoardParseError, SessionNotClosed, fetch_board
 from market.services.csv_import import load_price_rows
 from market.services.month_csv import append_rows
 from market.services.rows import PriceRow, parse_date
@@ -35,8 +25,7 @@ def import_csvs() -> int:
 
 def fetch_session_closes() -> int:
     try:
-        html = fetch_html(BOARD_URL)
-        session_date, quotes = parse_board(html)
+        session_date, quotes = fetch_board()
     except SessionNotClosed:
         raise
     except BoardParseError as exc:
@@ -45,32 +34,17 @@ def fetch_session_closes() -> int:
         raise
 
     run = IngestRun.objects.create(kind=IngestRun.KIND_BOARD)
-    warnings: list[str] = []
     written = 0
     try:
         live_start = parse_date(settings.LIVE_FEED_START)
         if session_date < live_start:
             _finish(run, IngestRun.STATUS_SUCCESS, 0, "Session date is before the live feed.")
             return 0
-        latest = (
-            DailyPrice.objects.filter(trade_date__gte=live_start)
-            .order_by("-trade_date")
-            .values_list("trade_date", flat=True)
-            .first()
-        )
-        grouped: dict[date, list[PriceRow]] = {}
-        if latest is not None and (session_date - latest).days > 1:
-            grouped, warnings = _catch_up(quotes, latest, session_date, live_start)
-        grouped.setdefault(session_date, [])
-        grouped[session_date].extend(quotes)
-
-        written = 0
-        for trade_date in sorted(grouped):
-            written += _store_new_rows(trade_date, grouped[trade_date])
+        written = _store_new_rows(session_date, quotes)
     except Exception as exc:
         _finish(run, IngestRun.STATUS_FAILED, written, str(exc))
         raise
-    _finish(run, IngestRun.STATUS_SUCCESS, written, "\n".join(warnings))
+    _finish(run, IngestRun.STATUS_SUCCESS, written, "")
     return written
 
 
@@ -139,26 +113,6 @@ def _store_new_rows(trade_date: date, rows: list[PriceRow]) -> int:
     written = upsert_prices(fresh, DailyPrice.SOURCE_BOARD)
     append_rows(data_dir, trade_date, fresh)
     return written
-
-
-def _catch_up(quotes: list[PriceRow], latest: date, session_date: date, live_start: date):
-    grouped: dict[date, list[PriceRow]] = {}
-    warnings = []
-    session = requests.Session()
-    for quote in quotes:
-        url = HISTORY_URL.format(code=quote.code.lower())
-        try:
-            html = fetch_html(url, session)
-        except requests.RequestException as exc:
-            warnings.append(f"{quote.code}: {exc}")
-            time.sleep(0.3)
-            continue
-        for row in parse_history(html, quote.code, quote.name):
-            if row.trade_date <= latest or row.trade_date >= session_date or row.trade_date < live_start:
-                continue
-            grouped.setdefault(row.trade_date, []).append(row)
-        time.sleep(0.3)
-    return grouped, warnings
 
 
 def _ensure_symbols(rows: list[PriceRow]) -> dict[str, Symbol]:

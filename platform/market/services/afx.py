@@ -13,9 +13,9 @@ urllib3_connection.allowed_gai_family = lambda: socket.AF_INET
 
 from market.services.rows import PriceRow, parse_date, parse_num, parse_volume
 
-BOARD_URL = "https://afx.kwayisi.org/nse/"
-HISTORY_URL = "https://afx.kwayisi.org/nse/{code}.html"
+BOARD_URL = "https://scanner.tradingview.com/kenya/scan"
 NAIROBI = ZoneInfo("Africa/Nairobi")
+_FOUR = Decimal("0.0001")
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -35,6 +35,80 @@ def fetch_html(url: str, session: requests.Session | None = None) -> str:
     response = client.get(url, headers={"User-Agent": USER_AGENT}, timeout=30)
     response.raise_for_status()
     return response.text
+
+
+def fetch_board():
+    """Latest NSE closes. The deployment server cannot reach afx.kwayisi.org."""
+    response = requests.post(
+        BOARD_URL,
+        json={
+            "columns": [
+                "name",
+                "description",
+                "close",
+                "change",
+                "change_abs",
+                "volume",
+                "high",
+                "low",
+                "update_time",
+            ],
+            "range": [0, 300],
+        },
+        headers={"User-Agent": USER_AGENT},
+        timeout=30,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    parsed = []
+    for item in payload.get("data") or []:
+        cells = item.get("d") or []
+        if len(cells) < 9:
+            continue
+        code = str(cells[0] or "").strip().upper()
+        price = _money(cells[2])
+        stamp = cells[8]
+        if not code or code.startswith("^") or price is None or not isinstance(stamp, (int, float)):
+            continue
+        observed = datetime.fromtimestamp(stamp, tz=_utc()).astimezone(NAIROBI)
+        change = _money(cells[4])
+        previous = price - change if change is not None else None
+        change_pct = _money(cells[3])
+        volume = _volume(cells[5])
+        parsed.append(
+            (
+                observed,
+                PriceRow(
+                    trade_date=observed.date(),
+                    code=code,
+                    name=str(cells[1] or code).strip() or code,
+                    day_price=price,
+                    previous=previous,
+                    change=change,
+                    change_pct=change_pct,
+                    volume=volume,
+                    day_low=_money(cells[7]),
+                    day_high=_money(cells[6]),
+                    price_text=_plain(price),
+                    previous_text="" if previous is None else _plain(previous),
+                    change_text="" if change is None else _plain(change),
+                    change_pct_text="" if change_pct is None else f"{change_pct:.2f}%",
+                    volume_text="" if volume is None else str(volume),
+                ),
+            )
+        )
+    if not parsed:
+        raise BoardParseError("The NSE price feed did not contain any prices.")
+    session_date = max(observed.date() for observed, _row in parsed)
+    now = datetime.now(NAIROBI)
+    if session_date == now.date() and (now.hour, now.minute) < (15, 30):
+        raise SessionNotClosed(
+            f"Nairobi time is {now:%H:%M}, before the 15:30 close."
+        )
+    quotes = [row for observed, row in parsed if observed.date() == session_date]
+    if not quotes:
+        raise BoardParseError("The NSE price feed had no prices for the latest session.")
+    return session_date, quotes
 
 
 def parse_board(html: str):
@@ -157,6 +231,28 @@ def _table_rows(table_html: str) -> list[list[str]]:
 def _strip(fragment: str) -> str:
     text = re.sub(r"<[^>]+>", " ", fragment)
     return " ".join(text.replace("&amp;", "&").split())
+
+
+def _utc():
+    from datetime import timezone
+
+    return timezone.utc
+
+
+def _money(value):
+    if value is None or value == "":
+        return None
+    try:
+        return Decimal(str(value)).quantize(_FOUR)
+    except Exception:
+        return None
+
+
+def _volume(value):
+    number = _money(value)
+    if number is None:
+        return None
+    return int(number)
 
 
 def _plain(value: Decimal) -> str:
