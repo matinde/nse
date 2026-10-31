@@ -1,9 +1,15 @@
 import re
+import socket
 from datetime import datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
 import requests
+import urllib3.util.connection as urllib3_connection
+
+# The board publishes IPv6 addresses first. The container has no IPv6 route,
+# so connect() fails with ENETUNREACH and the close is never saved.
+urllib3_connection.allowed_gai_family = lambda: socket.AF_INET
 
 from market.services.rows import PriceRow, parse_date, parse_num, parse_volume
 
