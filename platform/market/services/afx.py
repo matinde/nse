@@ -1,6 +1,6 @@
 import re
 import socket
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
@@ -13,9 +13,99 @@ urllib3_connection.allowed_gai_family = lambda: socket.AF_INET
 
 from market.services.rows import PriceRow, parse_date, parse_num, parse_volume
 
-BOARD_URL = "https://scanner.tradingview.com/kenya/scan"
+BOARD_URL = "https://afx.kwayisi.org/nse/"
+HISTORY_URL = "https://afx.kwayisi.org/nse/{code}.html"
+NSE_STATS_PAGE = "https://www.nse.co.ke/dataservices/market-statistics/"
+NSE_AJAX_URL = "https://www.nse.co.ke/dataservices/wp-admin/admin-ajax.php"
+NSE_SECTORS = (
+    "agric",
+    "auto",
+    "bank",
+    "comm",
+    "const",
+    "energy",
+    "insr",
+    "invest",
+    "investse",
+    "manu",
+    "tele",
+    "real",
+    "exchange",
+)
+# Official equity list is published by sector, with an ISIN and no ticker.
+ISIN_TO_CODE = {
+    "KE0000000281": "KUKZ",
+    "KE0000000430": "SASN",
+    "KE0000000208": "EGAD",
+    "KE0000000505": "WTK",
+    "KE4000001760": "KAPC",
+    "KE0000000356": "LIMT",
+    "KE0000000109": "CGEN",
+    "KE0000000091": "SBIC",
+    "KE0000000158": "DTK",
+    "KE0000000554": "EQTY",
+    "KE0000000315": "KCB",
+    "KE0000000398": "NBK",
+    "KE0000000406": "NCBA",
+    "KE0000000448": "SCBK",
+    "KE1000001568": "COOP",
+    "KE0000000125": "IMH",
+    "KE5000008986": "BKG",
+    "KE0000000067": "ABSA",
+    "KE9930006987": "FMLY",
+    "KE0000000240": "HFCK",
+    "KE0000000224": "XPRS",
+    "KE0000000307": "KQ",
+    "KE0000000380": "NMG",
+    "KE0000000562": "SCAN",
+    "KE0000000455": "SGL",
+    "KE0000000539": "TPSE",
+    "KE0000000489": "UCHM",
+    "KE0000000588": "EVRD",
+    "KE0000000232": "SMER",
+    "KE2000002275": "LKL",
+    "KE5000005438": "DCON",
+    "KE5000000090": "NBV",
+    "KE7000001433": "HBE",
+    "KE0000000034": "ARM",
+    "KE0000000059": "BAMB",
+    "KE0000000141": "CRWN",
+    "KE0000000174": "CABL",
+    "KE0000000190": "PORT",
+    "UG0000001145": "UMME",
+    "KE0000000547": "KEGN",
+    "KE0000000349": "KPLC",
+    "KE0000000463": "TOTL",
+    "KE9900006215": "KPC",
+    "KE0000000273": "JUB",
+    "KE0000000604": "KNRE",
+    "KE0000000414": "SLAM",
+    "KE2000002317": "CIC",
+    "KE2000002168": "LBTY",
+    "KE2000002192": "BRIT",
+    "KE4000001216": "KURV",
+    "KE0000000265": "CTUM",
+    "KE0000000166": "OCH",
+    "KE2000007258": "HAFR",
+    "KE2000002184": "TCL",
+    "KE3000009674": "NSE",
+    "KE0000000331": "AMAC",
+    "KE0000000042": "BOC",
+    "KE0000000075": "BAT",
+    "KE0000000117": "CARB",
+    "KE0000000216": "EABL",
+    "KE0000000372": "MSC",
+    "KE0000000497": "UNGA",
+    "KE4000001323": "FTGH",
+    "KE9900001216": "SKL",
+    "KE1000001402": "SCOM",
+    "KE9100008870": "LAPR",
+    "KE9900006322": "ALP",
+    "KE9930007092": "TRFC",
+    "ZAE000060067": "GLD",
+    "ZAE000246104": "SMWF",
+}
 NAIROBI = ZoneInfo("Africa/Nairobi")
-_FOUR = Decimal("0.0001")
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -30,85 +120,83 @@ class SessionNotClosed(Exception):
     pass
 
 
+def fetch_nse_board():
+    """Latest closes from the NSE market-statistics sector tables."""
+    page = requests.get(NSE_STATS_PAGE, headers={"User-Agent": USER_AGENT}, timeout=30)
+    page.raise_for_status()
+    nonce_match = re.search(r'"ajaxnonce":"([a-f0-9]+)"', page.text)
+    if nonce_match is None:
+        raise BoardParseError("The NSE statistics page did not include a sector key.")
+    nonce = nonce_match.group(1)
+    session_date = None
+    quotes = []
+    seen = set()
+    for sector in NSE_SECTORS:
+        response = requests.post(
+            NSE_AJAX_URL,
+            data={"action": "display_prices", "security": nonce, "sector": sector},
+            headers={"User-Agent": USER_AGENT},
+            timeout=30,
+        )
+        response.raise_for_status()
+        html = response.text
+        if session_date is None:
+            dated = re.search(r"Statistics as of (\d{1,2}-[A-Za-z]{3}-\d{4})", html)
+            if dated:
+                session_date = parse_date(dated.group(1))
+        for name, isin, volume_text, price_text, change_text in _sector_rows(html):
+            code = ISIN_TO_CODE.get(isin.upper())
+            price = parse_num(price_text)
+            if code is None or code in seen or price is None or price <= 0:
+                continue
+            seen.add(code)
+            change_pct = parse_num(change_text)
+            volume = parse_volume(volume_text)
+            short_name = _company_name(name)
+            quotes.append(
+                PriceRow(
+                    trade_date=date.min,
+                    code=code,
+                    name=short_name,
+                    day_price=price,
+                    change_pct=change_pct,
+                    volume=volume,
+                    price_text=price_text.strip(),
+                    change_pct_text=change_text.strip(),
+                    volume_text=volume_text.strip(),
+                )
+            )
+    if session_date is None:
+        raise BoardParseError("The NSE sector tables did not include a session date.")
+    now = datetime.now(NAIROBI)
+    if session_date == now.date() and (now.hour, now.minute) < (15, 30):
+        raise SessionNotClosed(f"Nairobi time is {now:%H:%M}, before the 15:30 close.")
+    if not quotes:
+        raise BoardParseError("The NSE sector tables did not contain any prices.")
+    for row in quotes:
+        row.trade_date = session_date
+    return session_date, quotes
+
+
+def _sector_rows(html: str):
+    return re.findall(
+        r"<tr><td>(.*?)</td>\s*<td>(.*?)</td>\s*<td>(.*?)</td>\s*<td>(.*?)</td>\s*<td[^>]*><span>([^<]+)",
+        html,
+        flags=re.S,
+    )
+
+
+def _company_name(name: str) -> str:
+    text = " ".join(name.split())
+    text = re.sub(r"\s+(?:Ord|0rd)\b.*$", "", text, flags=re.I)
+    return text.strip() or name.strip()
+
+
 def fetch_html(url: str, session: requests.Session | None = None) -> str:
     client = session or requests
     response = client.get(url, headers={"User-Agent": USER_AGENT}, timeout=30)
     response.raise_for_status()
     return response.text
-
-
-def fetch_board():
-    """Latest NSE closes. The deployment server cannot reach afx.kwayisi.org."""
-    response = requests.post(
-        BOARD_URL,
-        json={
-            "columns": [
-                "name",
-                "description",
-                "close",
-                "change",
-                "change_abs",
-                "volume",
-                "high",
-                "low",
-                "update_time",
-            ],
-            "range": [0, 300],
-        },
-        headers={"User-Agent": USER_AGENT},
-        timeout=30,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    parsed = []
-    for item in payload.get("data") or []:
-        cells = item.get("d") or []
-        if len(cells) < 9:
-            continue
-        code = str(cells[0] or "").strip().upper()
-        price = _money(cells[2])
-        stamp = cells[8]
-        if not code or code.startswith("^") or price is None or not isinstance(stamp, (int, float)):
-            continue
-        observed = datetime.fromtimestamp(stamp, tz=_utc()).astimezone(NAIROBI)
-        change = _money(cells[4])
-        previous = price - change if change is not None else None
-        change_pct = _money(cells[3])
-        volume = _volume(cells[5])
-        parsed.append(
-            (
-                observed,
-                PriceRow(
-                    trade_date=observed.date(),
-                    code=code,
-                    name=str(cells[1] or code).strip() or code,
-                    day_price=price,
-                    previous=previous,
-                    change=change,
-                    change_pct=change_pct,
-                    volume=volume,
-                    day_low=_money(cells[7]),
-                    day_high=_money(cells[6]),
-                    price_text=_plain(price),
-                    previous_text="" if previous is None else _plain(previous),
-                    change_text="" if change is None else _plain(change),
-                    change_pct_text="" if change_pct is None else f"{change_pct:.2f}%",
-                    volume_text="" if volume is None else str(volume),
-                ),
-            )
-        )
-    if not parsed:
-        raise BoardParseError("The NSE price feed did not contain any prices.")
-    session_date = max(observed.date() for observed, _row in parsed)
-    now = datetime.now(NAIROBI)
-    if session_date == now.date() and (now.hour, now.minute) < (15, 30):
-        raise SessionNotClosed(
-            f"Nairobi time is {now:%H:%M}, before the 15:30 close."
-        )
-    quotes = [row for observed, row in parsed if observed.date() == session_date]
-    if not quotes:
-        raise BoardParseError("The NSE price feed had no prices for the latest session.")
-    return session_date, quotes
 
 
 def parse_board(html: str):
@@ -231,28 +319,6 @@ def _table_rows(table_html: str) -> list[list[str]]:
 def _strip(fragment: str) -> str:
     text = re.sub(r"<[^>]+>", " ", fragment)
     return " ".join(text.replace("&amp;", "&").split())
-
-
-def _utc():
-    from datetime import timezone
-
-    return timezone.utc
-
-
-def _money(value):
-    if value is None or value == "":
-        return None
-    try:
-        return Decimal(str(value)).quantize(_FOUR)
-    except Exception:
-        return None
-
-
-def _volume(value):
-    number = _money(value)
-    if number is None:
-        return None
-    return int(number)
 
 
 def _plain(value: Decimal) -> str:

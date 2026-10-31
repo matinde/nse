@@ -5,7 +5,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from market.models import DailyPrice, IngestRun, Symbol
-from market.services.afx import BoardParseError, SessionNotClosed, fetch_board
+from market.services.afx import BoardParseError, SessionNotClosed, fetch_nse_board
 from market.services.csv_import import load_price_rows
 from market.services.month_csv import append_rows
 from market.services.rows import PriceRow, parse_date
@@ -25,7 +25,7 @@ def import_csvs() -> int:
 
 def fetch_session_closes() -> int:
     try:
-        session_date, quotes = fetch_board()
+        session_date, quotes = fetch_nse_board()
     except SessionNotClosed:
         raise
     except BoardParseError as exc:
