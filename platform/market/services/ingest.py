@@ -6,7 +6,7 @@ from django.utils import timezone
 
 from market.models import DailyPrice, IngestRun, Symbol
 from market.services.afx import BoardParseError, SessionNotClosed, fetch_nse_board
-from market.services.csv_import import load_price_rows
+from market.services.csv_import import load_price_rows, merge_missing_seed_rows
 from market.services.month_csv import append_rows
 from market.services.rows import PriceRow, parse_date
 
@@ -14,6 +14,7 @@ from market.services.rows import PriceRow, parse_date
 def import_csvs() -> int:
     run = IngestRun.objects.create(kind=IngestRun.KIND_CSV)
     try:
+        merge_missing_seed_rows()
         rows = load_price_rows()
         written = upsert_prices(rows, DailyPrice.SOURCE_CSV)
     except Exception as exc:
@@ -96,22 +97,29 @@ def upsert_prices(rows: list[PriceRow], source: str) -> int:
 
 
 def _store_new_rows(trade_date: date, rows: list[PriceRow]) -> int:
-    from market.services.month_csv import existing_keys, month_path
+    from market.services.month_csv import existing_keys, month_path, update_session_rows
 
     data_dir = settings.DATA_DIR
     present = existing_keys(month_path(data_dir, trade_date))
     fresh = []
+    already = []
     seen = set()
     for row in rows:
         key = (trade_date, row.code)
-        if key in present or key in seen:
+        if key in seen:
             continue
         seen.add(key)
-        fresh.append(row)
-    if not fresh:
+        if key in present:
+            already.append(row)
+        else:
+            fresh.append(row)
+    if not fresh and not already:
         return 0
-    written = upsert_prices(fresh, DailyPrice.SOURCE_BOARD)
-    append_rows(data_dir, trade_date, fresh)
+    written = upsert_prices(fresh + already, DailyPrice.SOURCE_BOARD)
+    if fresh:
+        append_rows(data_dir, trade_date, fresh)
+    if already:
+        update_session_rows(data_dir, trade_date, already)
     return written
 
 

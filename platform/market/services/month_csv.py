@@ -1,4 +1,5 @@
 import csv
+import io
 from datetime import date
 from pathlib import Path
 
@@ -51,6 +52,49 @@ def _cell(text: str, fallback) -> str:
     return rendered
 
 
+def _pct_cell(row: PriceRow) -> str:
+    text = (row.change_pct_text or "").strip()
+    if not text and row.change_pct is not None:
+        text = format_change_pct(row.change_pct)
+    if text and not text.endswith("%"):
+        text += "%"
+    return text
+
+
+def update_session_rows(data_dir: Path, trade_date: date, rows: list[PriceRow]) -> int:
+    """Replace the close, percent change, and volume on rows this job already wrote."""
+    path = month_path(data_dir, trade_date)
+    if not path.exists() or path.stat().st_size == 0 or not rows:
+        return 0
+    by_code = {row.code: row for row in rows}
+    date_text = format_csv_date(trade_date)
+    original = path.read_text(encoding="utf-8-sig")
+    newline = "\r\n" if "\r\n" in original else "\n"
+    changed = 0
+    output = []
+    for line in original.splitlines():
+        cells = next(csv.reader([line]))
+        code = cells[1].strip().upper() if len(cells) > 1 else ""
+        row = by_code.get(code)
+        if cells and cells[0].strip() == date_text and row is not None:
+            while len(cells) < len(HEADER):
+                cells.append("")
+            cells[7] = _cell(row.price_text, lambda row=row: format_decimal(row.day_price))
+            cells[10] = _pct_cell(row)
+            if row.volume_text or row.volume is not None:
+                cells[11] = row.volume_text.replace(",", "").strip() or str(row.volume)
+            buffer = io.StringIO()
+            csv.writer(buffer, lineterminator="").writerow(cells)
+            output.append(buffer.getvalue())
+            changed += 1
+        else:
+            output.append(line)
+    if changed:
+        ending = newline if original.endswith(("\n", "\r")) else ""
+        path.write_text(newline.join(output) + ending, encoding="utf-8")
+    return changed
+
+
 def append_rows(data_dir: Path, trade_date: date, rows: list[PriceRow]) -> int:
     path = month_path(data_dir, trade_date)
     present = existing_keys(path)
@@ -83,7 +127,7 @@ def append_rows(data_dir: Path, trade_date: date, rows: list[PriceRow]) -> int:
                     _cell(row.price_text, lambda row=row: format_decimal(row.day_price)),
                     _cell(row.previous_text, lambda row=row: format_decimal(row.previous)),
                     _cell(row.change_text, lambda row=row: format_decimal(row.change)),
-                    _cell(row.change_pct_text, lambda row=row: format_change_pct(row.change_pct)),
+                    _pct_cell(row),
                     _cell(row.volume_text, lambda row=row: "" if row.volume is None else str(row.volume)),
                     "-",
                 ]

@@ -63,7 +63,7 @@ def database_url():
     return url
 
 
-@st.cache_data(show_spinner="Loading NSE price history…", ttl=300)
+@st.cache_data(show_spinner="Loading NSE price history…", ttl=60)
 def load_data():
     engine = create_engine(database_url())
     data = pd.read_sql(
