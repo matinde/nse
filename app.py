@@ -38,6 +38,14 @@ div[data-testid="stMetricValue"] { color:#17243b; }
 div[data-testid="stMetricDelta"] { font-weight:650; }
 div[data-testid="stTabs"] button { font-weight:650; }
 div[data-testid="stAlert"] { border-radius:12px; }
+.invest-anchor { display:none; }
+[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .invest-anchor) {
+  background: #d5ddd6;
+  border: 1px solid #b7c3b8;
+  border-radius: 18px;
+  padding: 0.85rem 1.15rem 1.2rem;
+  margin: 0.85rem 0 1rem;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -120,6 +128,39 @@ def nearest_on_or_before(history, date):
     if before.empty:
         return None
     return before.iloc[-1]
+
+def holding_result(history, amount, purchase_date, sell_date):
+    """Whole shares bought at the close on or before purchase, valued at the close on or before sale."""
+    if sell_date < purchase_date:
+        return None, "Choose a sell date on or after the purchase date."
+    buy = nearest_on_or_before(history, purchase_date)
+    sell = nearest_on_or_before(history, sell_date)
+    if buy is None:
+        return None, "There is no price on or before the purchase date."
+    if sell is None or sell["date"] < buy["date"]:
+        return None, "There is no sale price on or after that purchase."
+    buy_price = float(buy["price"])
+    sell_price = float(sell["price"])
+    if buy_price <= 0:
+        return None, "The purchase price is not usable."
+    shares = int(amount // buy_price)
+    cash_left = amount - shares * buy_price
+    value = shares * sell_price
+    wealth = value + cash_left
+    gain = wealth - amount
+    gain_pct = (wealth / amount - 1) * 100 if amount else 0
+    return {
+        "buy_date": buy["date"],
+        "sell_date": sell["date"],
+        "buy_price": buy_price,
+        "sell_price": sell_price,
+        "shares": shares,
+        "cash_left": cash_left,
+        "value": value,
+        "wealth": wealth,
+        "gain": gain,
+        "gain_pct": gain_pct,
+    }, ""
 
 def make_line_chart(df, x="date", y="price", color=None, title=None):
     fig = px.line(df, x=x, y=y, color=color, title=title,
@@ -212,34 +253,150 @@ if mode == "Single stock":
                           yaxis_title="Price (KSh)", xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown("<div class='section-title'>What if you had invested?</div>", unsafe_allow_html=True)
-    st.caption("Uses the nearest available trading record on or before the chosen purchase date, and the latest recorded price in the dataset. Fees, taxes and dividends are not included.")
-    inv1, inv2 = st.columns([1, 1])
-    with inv1:
-        investment = st.number_input("Investment amount (KSh)", min_value=100.0, value=1_000_000.0, step=50_000.0, format="%.2f")
-        purchase_date = st.date_input("Purchase date", value=max(min_date, min(pd.Timestamp("2024-10-28").date(), max_date)), min_value=min_date, max_value=max_date)
-    buy = nearest_on_or_before(hist, purchase_date)
-    with inv2:
-        if buy is None:
-            st.warning("There is no price record on or before that date for this stock.")
+    with st.container():
+        st.markdown('<span class="invest-anchor"></span>', unsafe_allow_html=True)
+        st.markdown("<div class='section-title'>What if you had invested?</div>", unsafe_allow_html=True)
+        st.caption("Buy and sell at the nearest recorded close on or before each date. The sell date starts at the latest date in the data. Fees, taxes and dividends are not included.")
+        default_purchase = max(min_date, min(pd.Timestamp("2024-10-28").date(), max_date))
+        inv1, inv2, inv3 = st.columns(3)
+        with inv1:
+            investment = st.number_input("Investment amount (KSh)", min_value=100.0, value=1_000_000.0, step=50_000.0, format="%.2f", key="one_amount")
+        with inv2:
+            purchase_date = st.date_input("Purchase date", value=default_purchase, min_value=min_date, max_value=max_date, key="one_buy")
+        with inv3:
+            sell_date = st.date_input("Sell date", value=max_date, min_value=min_date, max_value=max_date, key="one_sell")
+        result, reason = holding_result(hist, investment, purchase_date, sell_date)
+        if result is None:
+            st.warning(reason)
         else:
-            shares = int(investment // buy["price"]) if buy["price"] > 0 else 0
-            cash_left = investment - shares * buy["price"]
-            value_now = shares * latest["price"]
-            gain = value_now - investment
-            gain_pct = (value_now / investment - 1) * 100 if investment else 0
-            st.markdown(f"**Purchase price used:** {price_fmt(buy['price'])} · {buy['date']:%d %b %Y}")
-            st.markdown(f"**Shares bought:** {shares:,}")
-            st.markdown(f"**Cash left over:** {money(cash_left)}")
-            st.markdown(f"**Value at latest price:** {money(value_now)}")
-            st.markdown(f"**Profit / loss:** {money(gain)} ({pct(gain_pct)})")
-            st.progress(max(0.0, min(1.0, (gain_pct + 100) / 500)), text="Return visual (scale capped at +400%; loss below -100% is not possible for an unleveraged share)")
+            r1, r2 = st.columns(2)
+            with r1:
+                st.markdown(f"**Purchase price used:** {price_fmt(result['buy_price'])} · {result['buy_date']:%d %b %Y}")
+                st.markdown(f"**Sale price used:** {price_fmt(result['sell_price'])} · {result['sell_date']:%d %b %Y}")
+                st.markdown(f"**Shares bought:** {result['shares']:,}")
+            with r2:
+                st.markdown(f"**Cash left over:** {money(result['cash_left'])}")
+                st.markdown(f"**Value of shares at sale:** {money(result['value'])}")
+                st.markdown(f"**Profit / loss:** {money(result['gain'])} ({pct(result['gain_pct'])})")
+            st.progress(max(0.0, min(1.0, (result["gain_pct"] + 100) / 500)), text="Return visual (scale capped at +400%; loss below -100% is not possible for an unleveraged share)")
+
+        st.markdown("<div class='section-title'>A portfolio</div>", unsafe_allow_html=True)
+        st.caption("Split a pot across several stocks. Each holding uses whole shares. Cash you do not spend is still cash, and the profit is the change in the shares.")
+        pf1, pf2, pf3 = st.columns(3)
+        with pf1:
+            pot = st.number_input("Amount to invest (KSh)", min_value=100.0, value=100_000.0, step=10_000.0, format="%.2f", key="pot")
+        with pf2:
+            portfolio_purchase = st.date_input("Purchase date", value=default_purchase, min_value=min_date, max_value=max_date, key="pf_buy")
+        with pf3:
+            portfolio_sell = st.date_input("Sell date", value=max_date, min_value=min_date, max_value=max_date, key="pf_sell")
+        portfolio_defaults = [code for code in ["DTK", "SCOM", "EQTY", "KCB"] if code in symbols]
+        if not portfolio_defaults:
+            portfolio_defaults = symbols[:3]
+        chosen = st.multiselect("Stocks in the mix", symbols, default=portfolio_defaults[:4], max_selections=8)
+        holdings = []
+        if not chosen:
+            st.info("Choose at least one stock.")
+        else:
+            share = float(pot) / len(chosen)
+            alloc_cols = st.columns(min(4, len(chosen)))
+            allocations = {}
+            for index, code in enumerate(chosen):
+                with alloc_cols[index % 4]:
+                    allocations[code] = st.number_input(
+                        f"{code} (KSh)",
+                        min_value=0.0,
+                        value=float(share),
+                        step=1_000.0,
+                        format="%.2f",
+                        key=f"alloc_{code}",
+                    )
+            allocated = sum(allocations.values())
+            notes = []
+            for code in chosen:
+                amount = allocations[code]
+                if amount <= 0:
+                    notes.append(f"{code} has no money allocated.")
+                    continue
+                series = equity_data[equity_data["Code"] == code].sort_values("date")
+                outcome, outcome_reason = holding_result(series, amount, portfolio_purchase, portfolio_sell)
+                name = series["display_name"].iloc[-1] if not series.empty else code
+                if outcome is None:
+                    notes.append(f"{code}: {outcome_reason}")
+                    continue
+                holdings.append({"Code": code, "Company": name, "Amount": amount, **outcome})
+            unallocated = pot - allocated
+            if allocated > pot + 0.01:
+                st.warning(f"The mix adds up to {money(allocated)}, which is {money(allocated - pot)} more than the pot.")
+            elif unallocated > 0.01:
+                st.caption(f"Allocated {money(allocated)}. {money(unallocated)} of the pot is still unallocated cash.")
+            if notes:
+                st.warning(" ".join(notes))
+            if holdings:
+                table = pd.DataFrame(holdings)
+                table = table.sort_values(["gain", "gain_pct"], ascending=False)
+                table.insert(0, "Rank", range(1, len(table) + 1))
+                show_table = table.rename(columns={
+                    "buy_price": "Buy price",
+                    "sell_price": "Sell price",
+                    "buy_date": "Bought",
+                    "sell_date": "Sold",
+                    "shares": "Shares",
+                    "cash_left": "Cash left",
+                    "value": "Share value",
+                    "gain": "Profit / loss",
+                    "gain_pct": "Return %",
+                })
+                show_table["Bought"] = pd.to_datetime(show_table["Bought"]).dt.strftime("%d %b %Y")
+                show_table["Sold"] = pd.to_datetime(show_table["Sold"]).dt.strftime("%d %b %Y")
+                show_table = show_table[["Rank", "Code", "Company", "Amount", "Shares", "Bought", "Buy price", "Sold", "Sell price", "Share value", "Cash left", "Profit / loss", "Return %"]]
+                st.dataframe(
+                    show_table.style.format({
+                        "Amount": "{:,.2f}",
+                        "Buy price": "{:,.2f}",
+                        "Sell price": "{:,.2f}",
+                        "Share value": "{:,.2f}",
+                        "Cash left": "{:,.2f}",
+                        "Profit / loss": "{:+,.2f}",
+                        "Return %": "{:+.2f}%",
+                    }),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+                share_value = float(table["value"].sum())
+                rounding_cash = float(table["cash_left"].sum())
+                placed = float(table["Amount"].sum())
+                unplaced = allocated - placed
+                cash_held = rounding_cash + unplaced + max(unallocated, 0)
+                wealth = share_value + cash_held
+                basis = pot if unallocated >= -0.01 else allocated
+                gain = wealth - basis
+                gain_pct = (gain / basis * 100) if basis else 0
+                t1, t2, t3, t4 = st.columns(4)
+                t1.metric("Spent on shares", money(placed - rounding_cash))
+                t2.metric("Cash still held", money(cash_held))
+                t3.metric("Wealth at sale", money(wealth))
+                t4.metric("Portfolio profit / loss", money(gain), delta=pct(gain_pct))
+                rank_chart = table.sort_values("gain_pct")
+                fig = px.bar(
+                    rank_chart, x="gain_pct", y="Code", orientation="h",
+                    hover_data=["Company", "gain"],
+                    labels={"gain_pct": "Return (%)", "Code": ""},
+                    title="Ranked by return",
+                )
+                fig.update_layout(
+                    template="plotly_white", height=max(220, 46 * len(rank_chart) + 80),
+                    margin=dict(l=8, r=8, t=48, b=8), paper_bgcolor="rgba(0,0,0,0)",
+                    title_font=dict(size=16, color="#17243b"),
+                )
+                fig.update_xaxes(ticksuffix="%", gridcolor="#edf1f6")
+                st.plotly_chart(fig, use_container_width=True)
     with st.expander("How to read this"):
         st.markdown("""
 - **Latest recorded price** is the last date present in your files, not a live market quote.
 - **Change vs previous record** compares the last row with the previous row for that company.
-- **Investment value** assumes whole shares only; unused cash is not invested.
-- **Profit/loss** is measured against the full amount you entered, so leftover cash is conservatively treated as part of the investment principal.
+- **Purchase date** and **sell date** each use the nearest recorded close on or before that day. The sell date starts at the latest date in the data.
+- Shares are bought in whole shares. Cash that cannot buy another share is still cash, so it is not a loss.
+- The portfolio ranks each stock by profit, then adds the holdings into one result. Unallocated cash stays cash.
 - Dividends and corporate actions are not included because the supplied `Adjusted Price` column is entirely `-`.
 """)
     with st.expander("View recent records"):
