@@ -68,12 +68,24 @@ div[data-testid="stMetricDelta"] { font-weight:650; }
   padding: .6rem .75rem .8rem;
 }
 [data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .chat-anchor.chat-closed) {
+  position: fixed;
+  left: 1rem;
+  bottom: 1rem;
+  z-index: 1000002;
   width: auto;
+  max-height: none;
+  overflow: visible;
   background: transparent;
   border: 0;
   box-shadow: none;
   padding: 0;
-  overflow: visible;
+}
+div[data-testid="stCustomComponentV1"] {
+  height: 0 !important;
+  min-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden;
 }
 .chat-anchor { display: none; }
 div[data-testid="stTabs"] button { font-weight:650; }
@@ -244,20 +256,75 @@ def setup_django():
 def nairobi_today():
     return datetime.now(ZoneInfo("Africa/Nairobi")).date()
 
+def browser_cookies():
+    try:
+        return dict(st.context.cookies)
+    except Exception:
+        return {}
+
+def cookie_is_secure():
+    try:
+        return str(st.context.url).startswith("https://")
+    except Exception:
+        return True
+
+def write_login_cookie(token, max_age):
+    import streamlit.components.v1 as components
+    from urllib.parse import quote
+
+    secure = "; Secure" if cookie_is_secure() else ""
+    value = quote(token, safe="") if token else ""
+    components.html(
+        f"""<script>document.cookie = "nse_session={value}; Path=/; Max-Age={max_age}; SameSite=Lax{secure}";</script>""",
+        height=0,
+        width=0,
+    )
+
+def user_id_from_cookie():
+    from urllib.parse import unquote
+    from django.core import signing
+
+    raw = browser_cookies().get("nse_session", "")
+    if not raw:
+        return None
+    try:
+        data = signing.loads(unquote(raw), salt="nse-login", max_age=14 * 24 * 3600)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data.get("uid")
+
+def remember_login(user):
+    from django.core import signing
+
+    if st.session_state.get("cookie_written"):
+        return
+    token = signing.dumps({"uid": user.pk}, salt="nse-login")
+    write_login_cookie(token, 14 * 24 * 3600)
+    st.session_state["cookie_written"] = True
+
 def signed_in_user():
     from django.contrib.auth import get_user_model
     from django.db import close_old_connections
 
     close_old_connections()
-    user_id = st.session_state.get("user_id")
+    if st.session_state.get("ignore_cookie"):
+        st.session_state.pop("user_id", None)
+        return None
+    user_id = st.session_state.get("user_id") or user_id_from_cookie()
     if not user_id:
         return None
     user = get_user_model().objects.filter(pk=user_id, is_active=True).first()
     if user is None:
         st.session_state.pop("user_id", None)
+        return None
+    st.session_state["user_id"] = user.pk
     return user
 
 def show_login():
+    if st.session_state.get("ignore_cookie"):
+        write_login_cookie("", 0)
     st.markdown("""
 <div class="hero">
   <h1>📈 NSE Investment Explorer</h1>
@@ -645,47 +712,48 @@ def ask_market_bot(history, context):
 def render_market_chat(equity_data):
     open_chat = bool(st.session_state.get("chat_open"))
     css_class = "chat-anchor" if open_chat else "chat-anchor chat-closed"
-    st.markdown(f'<span class="{css_class}"></span>', unsafe_allow_html=True)
-    if st.button("Close chat" if open_chat else "Ask", key="chat_toggle", help="Ask about these prices"):
-        st.session_state["chat_open"] = not open_chat
-        st.rerun()
-    if not open_chat:
-        return
-    st.caption("Ask about the closes in this app. Answers use the price history, not a live quote.")
-    if not os.environ.get("OPENROUTER_API_KEY", "").strip():
-        st.info("Add OPENROUTER_API_KEY and the chat can answer.")
-    for message in st.session_state.get("chat_messages", [])[-8:]:
-        speaker = "You" if message["role"] == "user" else "Assistant"
-        st.markdown(f"**{speaker}:** {message['content']}")
-    if st.session_state.pop("chat_clear_draft", False):
-        st.session_state["chat_draft"] = ""
-    draft = st.text_input("Question", key="chat_draft", label_visibility="collapsed", placeholder="Ask about a stock or the market")
-    send_col, clear_col = st.columns(2)
-    with send_col:
-        send = st.button("Send", key="chat_send", use_container_width=True)
-    with clear_col:
-        clear = st.button("Clear", key="chat_clear", use_container_width=True)
-    if clear:
-        st.session_state["chat_messages"] = []
+    with st.container():
+        st.markdown(f'<span class="{css_class}"></span>', unsafe_allow_html=True)
+        if st.button("Close chat" if open_chat else "Ask", key="chat_toggle", help="Ask about these prices"):
+            st.session_state["chat_open"] = not open_chat
+            st.rerun()
+        if not open_chat:
+            return
+        st.caption("Ask about the closes in this app. Answers use the price history, not a live quote.")
+        if not os.environ.get("OPENROUTER_API_KEY", "").strip():
+            st.info("Add OPENROUTER_API_KEY and the chat can answer.")
+        for message in st.session_state.get("chat_messages", [])[-8:]:
+            speaker = "You" if message["role"] == "user" else "Assistant"
+            st.markdown(f"**{speaker}:** {message['content']}")
+        if st.session_state.pop("chat_clear_draft", False):
+            st.session_state["chat_draft"] = ""
+        draft = st.text_input("Question", key="chat_draft", label_visibility="collapsed", placeholder="Ask about a stock or the market")
+        send_col, clear_col = st.columns(2)
+        with send_col:
+            send = st.button("Send", key="chat_send", use_container_width=True)
+        with clear_col:
+            clear = st.button("Clear", key="chat_clear", use_container_width=True)
+        if clear:
+            st.session_state["chat_messages"] = []
+            st.session_state["chat_clear_draft"] = True
+            st.rerun()
+        if not send or not str(draft or "").strip():
+            return
+        question = str(draft).strip()
+        history = list(st.session_state.get("chat_messages", []))
+        history.append({"role": "user", "content": question})
+        try:
+            answer = ask_market_bot(
+                history,
+                market_context(equity_data, question, st.session_state.get("focus_code")),
+            )
+        except Exception as exc:
+            st.error(str(exc))
+            return
+        history.append({"role": "assistant", "content": answer})
+        st.session_state["chat_messages"] = history[-12:]
         st.session_state["chat_clear_draft"] = True
         st.rerun()
-    if not send or not str(draft or "").strip():
-        return
-    question = str(draft).strip()
-    history = list(st.session_state.get("chat_messages", []))
-    history.append({"role": "user", "content": question})
-    try:
-        answer = ask_market_bot(
-            history,
-            market_context(equity_data, question, st.session_state.get("focus_code")),
-        )
-    except Exception as exc:
-        st.error(str(exc))
-        return
-    history.append({"role": "assistant", "content": answer})
-    st.session_state["chat_messages"] = history[-12:]
-    st.session_state["chat_clear_draft"] = True
-    st.rerun()
 
 setup_django()
 try:
@@ -695,6 +763,7 @@ except Exception as exc:
     st.stop()
 if user is None:
     show_login()
+remember_login(user)
 
 st.markdown("""
 <div class="hero">
@@ -725,7 +794,9 @@ with st.sidebar:
     st.markdown("---")
     st.caption(f"Signed in as {user.username}")
     if st.button("Log out"):
+        st.session_state["ignore_cookie"] = True
         st.session_state.pop("user_id", None)
+        st.session_state.pop("cookie_written", None)
         st.rerun()
     st.markdown("---")
     st.caption("For research and education. Historical performance is not a forecast.")
