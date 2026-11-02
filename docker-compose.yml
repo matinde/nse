@@ -41,6 +41,8 @@ services:
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
       DATA_DIR: /app/data
       CSRF_TRUSTED_ORIGINS: https://nse.matinde.com,https://admin.matinde.com,${SERVICE_URL_WEB_9011:-http://localhost:9011},${SERVICE_URL_WEB_9012:-http://localhost:9012}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-openai/gpt-6-luna-pro}
     volumes:
       - ./data:/app/data
     ports:

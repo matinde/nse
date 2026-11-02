@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 from datetime import datetime
 from decimal import Decimal
@@ -52,6 +53,29 @@ div[data-testid="stMetricDelta"] { font-weight:650; }
   line-height: 1.3; overflow-wrap: anywhere; margin-top: .28rem;
 }
 .fit-delta { font-size: .85rem; font-weight: 650; margin-top: .15rem; }
+[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .chat-anchor) {
+  position: fixed;
+  left: 1rem;
+  bottom: 1rem;
+  z-index: 1000002;
+  width: min(24rem, calc(100vw - 2rem));
+  max-height: 70vh;
+  overflow: auto;
+  background: #ffffff;
+  border: 1px solid #d7ddd4;
+  border-radius: 18px;
+  box-shadow: 0 16px 40px rgba(16,27,45,.22);
+  padding: .6rem .75rem .8rem;
+}
+[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .chat-anchor.chat-closed) {
+  width: auto;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
+  overflow: visible;
+}
+.chat-anchor { display: none; }
 div[data-testid="stTabs"] button { font-weight:650; }
 div[data-testid="stAlert"] { border-radius:12px; }
 .invest-anchor { display:none; }
@@ -139,14 +163,16 @@ def price_fmt(v):
         return f"KSh {v:.3f}"
     return f"KSh {v:,.2f}"
 
-def fit_stat(label, value, delta=None):
-    delta_html = ""
+def fit_stat(label, value, delta=None, note=None):
+    extra = ""
     if delta:
         color = "#0f7b4c" if str(delta).strip().startswith("+") else "#b42318"
-        delta_html = f"<div class='fit-delta' style='color:{color}'>{delta}</div>"
+        extra += f"<div class='fit-delta' style='color:{color}'>{delta}</div>"
+    if note:
+        extra += f"<div class='fit-delta' style='color:#63728a'>{note}</div>"
     st.markdown(
         f"<div class='fit-stat'><div class='fit-label'>{label}</div>"
-        f"<div class='fit-value'>{value}</div>{delta_html}</div>",
+        f"<div class='fit-value'>{value}</div>{extra}</div>",
         unsafe_allow_html=True,
     )
 
@@ -538,6 +564,129 @@ def show_holding_chart(equity_data, codes, min_date, max_date, bands, slider_key
     window["indexed"] = window["price"] / window["base_price"] * 100
     st.plotly_chart(price_path_chart(window, "Share prices across the dates you chose", bands), use_container_width=True)
 
+def market_context(equity_data, question, focus_code):
+    codes = sorted(equity_data["Code"].astype(str).unique())
+    mentioned = [code for code in codes if re.search(rf"\b{re.escape(code)}\b", question or "", flags=re.I)]
+    if focus_code and focus_code not in mentioned:
+        mentioned.insert(0, focus_code)
+    mentioned = mentioned[:3]
+    lines = [
+        f"Closes run from {equity_data['date'].min():%d %b %Y} to {equity_data['date'].max():%d %b %Y}.",
+        f"{len(codes)} symbols. Day Price is the daily close in Kenyan shillings.",
+        "Symbols: " + ", ".join(codes),
+    ]
+    for code in mentioned:
+        history = equity_data[equity_data["Code"] == code].sort_values("date")
+        if history.empty:
+            continue
+        latest = history.iloc[-1]
+        low = history.loc[history["price"].idxmin()]
+        high = history.loc[history["price"].idxmax()]
+        lines.append(
+            f"{code} {latest['display_name']}: latest {latest['price']} on {latest['date']:%Y-%m-%d}; "
+            f"lowest {low['price']} on {low['date']:%Y-%m-%d}; "
+            f"highest {high['price']} on {high['date']:%Y-%m-%d}."
+        )
+        recent = [
+            f"{row.date:%Y-%m-%d} {row.price}"
+            for row in history.tail(12).itertuples(index=False)
+        ]
+        lines.append(f"{code} latest closes: " + "; ".join(recent))
+    return "\n".join(lines)
+
+def ask_market_bot(history, context):
+    import requests
+
+    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("OPENROUTER_API_KEY is not set.")
+    model = os.environ.get("OPENROUTER_MODEL", "").strip() or "openai/gpt-6-luna-pro"
+    messages = [{
+        "role": "system",
+        "content": (
+            "You analyse Nairobi Securities Exchange daily closes for the NSE Investment Explorer. "
+            "Use only the market data supplied with the question. If a figure is not in that data, say so. "
+            "Prices are Kenyan shillings. Do not give personal financial advice. Keep the answer short and name the dates you use."
+        ),
+    }]
+    messages.extend(history[-8:])
+    if messages[-1]["role"] == "user":
+        messages[-1] = {
+            "role": "user",
+            "content": "Market data:\n" + context + "\n\nQuestion:\n" + messages[-1]["content"],
+        }
+    response = requests.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://nse.matinde.com",
+            "X-Title": "NSE Investment Explorer",
+        },
+        json={"model": model, "temperature": 0.2, "messages": messages},
+        timeout=60,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"OpenRouter returned HTTP {response.status_code}.")
+    try:
+        content = response.json()["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise RuntimeError("OpenRouter returned an unreadable response.") from exc
+    if isinstance(content, list):
+        content = "".join(
+            part.get("text", "") if isinstance(part, dict) else str(part)
+            for part in content
+        )
+    text = str(content or "").strip()
+    if not text:
+        raise RuntimeError("OpenRouter returned an empty answer.")
+    return text
+
+def render_market_chat(equity_data):
+    open_chat = bool(st.session_state.get("chat_open"))
+    css_class = "chat-anchor" if open_chat else "chat-anchor chat-closed"
+    st.markdown(f'<span class="{css_class}"></span>', unsafe_allow_html=True)
+    if st.button("Close chat" if open_chat else "Ask", key="chat_toggle", help="Ask about these prices"):
+        st.session_state["chat_open"] = not open_chat
+        st.rerun()
+    if not open_chat:
+        return
+    st.caption("Ask about the closes in this app. Answers use the price history, not a live quote.")
+    if not os.environ.get("OPENROUTER_API_KEY", "").strip():
+        st.info("Add OPENROUTER_API_KEY and the chat can answer.")
+    for message in st.session_state.get("chat_messages", [])[-8:]:
+        speaker = "You" if message["role"] == "user" else "Assistant"
+        st.markdown(f"**{speaker}:** {message['content']}")
+    if st.session_state.pop("chat_clear_draft", False):
+        st.session_state["chat_draft"] = ""
+    draft = st.text_input("Question", key="chat_draft", label_visibility="collapsed", placeholder="Ask about a stock or the market")
+    send_col, clear_col = st.columns(2)
+    with send_col:
+        send = st.button("Send", key="chat_send", use_container_width=True)
+    with clear_col:
+        clear = st.button("Clear", key="chat_clear", use_container_width=True)
+    if clear:
+        st.session_state["chat_messages"] = []
+        st.session_state["chat_clear_draft"] = True
+        st.rerun()
+    if not send or not str(draft or "").strip():
+        return
+    question = str(draft).strip()
+    history = list(st.session_state.get("chat_messages", []))
+    history.append({"role": "user", "content": question})
+    try:
+        answer = ask_market_bot(
+            history,
+            market_context(equity_data, question, st.session_state.get("focus_code")),
+        )
+    except Exception as exc:
+        st.error(str(exc))
+        return
+    history.append({"role": "assistant", "content": answer})
+    st.session_state["chat_messages"] = history[-12:]
+    st.session_state["chat_clear_draft"] = True
+    st.rerun()
+
 setup_django()
 try:
     user = signed_in_user()
@@ -585,13 +734,17 @@ if mode == "Single stock":
     symbols = sorted(equity_data["Code"].unique())
     default_symbol = "DTK" if "DTK" in symbols else ("UCHM" if "UCHM" in symbols else symbols[0])
     symbol = st.selectbox("Choose a company", symbols, index=symbols.index(default_symbol))
+    st.session_state["focus_code"] = symbol
     hist = equity_data[equity_data["Code"] == symbol].sort_values("date").copy()
     company_name = hist["display_name"].iloc[-1]
     latest = hist.iloc[-1]
     first = hist.iloc[0]
 
+    low_row = hist.loc[hist["price"].idxmin()]
+    high_row = hist.loc[hist["price"].idxmax()]
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Latest recorded price", price_fmt(latest["price"]), help=f"Last record in this dataset: {latest['date']:%d %b %Y}")
+    with c1:
+        fit_stat("Latest recorded price", price_fmt(latest["price"]), note=f"{latest['date']:%d %b %Y}")
     if len(hist) > 1:
         prev = hist.iloc[-2]
         dchange = latest["price"] - prev["price"]
@@ -600,8 +753,11 @@ if mode == "Single stock":
         dchange, dchange_pct = None, None
     c2.metric("Change vs previous record", price_fmt(dchange) if dchange is not None else "—",
               delta=pct(dchange_pct) if dchange_pct is not None else None)
-    c3.metric("Lowest recorded price", price_fmt(hist["price"].min()))
-    c4.metric("Highest recorded price", price_fmt(hist["price"].max()))
+    with c3:
+        fit_stat("Lowest recorded price", price_fmt(low_row["price"]), note=f"{low_row['date']:%d %b %Y}")
+    with c4:
+        fit_stat("Highest recorded price", price_fmt(high_row["price"]), note=f"{high_row['date']:%d %b %Y}")
+    st.caption(f"Latest, lowest and highest use the full record, from {hist['date'].min():%d %b %Y} to {hist['date'].max():%d %b %Y}.")
 
     st.markdown(f"<div class='section-title'>{company_name} <span class='subtle'>({symbol})</span></div>", unsafe_allow_html=True)
     st.caption(f"History available: {hist['date'].min():%d %b %Y} to {hist['date'].max():%d %b %Y}. Non-trading days are naturally absent.")
@@ -963,3 +1119,4 @@ elif mode == "Data quality":
 
 st.markdown("---")
 st.caption(f"NSE Investment Explorer · Prices through {max_date:%d %b %Y}. Not investment advice.")
+render_market_chat(equity_data)
