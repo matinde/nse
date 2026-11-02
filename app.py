@@ -1,4 +1,9 @@
 import os
+import sys
+from datetime import datetime
+from decimal import Decimal
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import plotly.express as px
@@ -162,6 +167,231 @@ def holding_result(history, amount, purchase_date, sell_date):
         "gain_pct": gain_pct,
     }, ""
 
+def setup_django():
+    import django
+    from django.apps import apps
+
+    if apps.ready:
+        return
+    root = Path(__file__).resolve().parent
+    for path in (root, root / "platform"):
+        if (path / "config" / "settings.py").exists():
+            sys.path.insert(0, str(path))
+            break
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+    django.setup()
+
+def nairobi_today():
+    return datetime.now(ZoneInfo("Africa/Nairobi")).date()
+
+def signed_in_user():
+    from django.contrib.auth import get_user_model
+    from django.db import close_old_connections
+
+    close_old_connections()
+    user_id = st.session_state.get("user_id")
+    if not user_id:
+        return None
+    user = get_user_model().objects.filter(pk=user_id, is_active=True).first()
+    if user is None:
+        st.session_state.pop("user_id", None)
+    return user
+
+def show_login():
+    st.markdown("""
+<div class="hero">
+  <h1>📈 NSE Investment Explorer</h1>
+  <p>Log in to see Nairobi Securities Exchange prices and your portfolio.</p>
+</div>
+""", unsafe_allow_html=True)
+    st.markdown("<div class='section-title'>Log in</div>", unsafe_allow_html=True)
+    st.caption("An administrator creates your account. There is no registration on this site.")
+    with st.form("login"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Log in")
+    if submitted:
+        from django.contrib.auth import authenticate
+
+        user = authenticate(username=username.strip(), password=password)
+        if user is None or not user.is_active:
+            st.error("That username or password is not valid.")
+        else:
+            st.session_state["user_id"] = user.pk
+            st.rerun()
+    st.stop()
+
+def trade_rows(user):
+    from market.models import PortfolioTrade
+
+    rows = []
+    for trade in PortfolioTrade.objects.filter(user=user).select_related("symbol"):
+        rows.append({
+            "id": trade.id,
+            "code": trade.symbol.code,
+            "side": trade.side,
+            "shares": trade.shares,
+            "price": trade.price,
+            "trade_date": trade.trade_date,
+        })
+    return rows
+
+def official_close(equity_data, code, day):
+    history = equity_data[equity_data["Code"] == code]
+    exact = history[history["date"].dt.date == day]
+    if exact.empty:
+        return None
+    return float(exact.iloc[-1]["price"])
+
+def render_portfolio(user, equity_data, symbols, min_date, max_date):
+    from market.models import PortfolioTrade, Symbol
+    from market.services.portfolio import combine_trades
+
+    st.markdown("<div class='section-title'>My portfolio</div>", unsafe_allow_html=True)
+    st.caption("These trades are saved to your account. Holdings are valued at the latest official close. A price you type can differ from that close.")
+    entry_max = max(max_date, nairobi_today())
+    entry_default = min(nairobi_today(), entry_max)
+    with st.form("add_trade"):
+        form_left, form_mid, form_right = st.columns(3)
+        with form_left:
+            trade_code = st.selectbox("Stock", symbols, index=symbols.index("DTK") if "DTK" in symbols else 0)
+            trade_side = st.selectbox("Side", ["Buy", "Sell"])
+        with form_mid:
+            trade_shares = st.number_input("Shares", min_value=1, step=1, value=1)
+            trade_price = st.number_input("Price per share (KSh)", min_value=0.01, value=1.00, step=0.01, format="%.2f")
+        with form_right:
+            trade_date = st.date_input("Trade date", value=entry_default, min_value=min_date, max_value=entry_max)
+        save_trade = st.form_submit_button("Save trade")
+    if save_trade:
+        draft = trade_rows(user)
+        draft.append({
+            "id": None,
+            "code": trade_code,
+            "side": trade_side.lower(),
+            "shares": int(trade_shares),
+            "price": Decimal(str(trade_price)),
+            "trade_date": trade_date,
+        })
+        _positions, error = combine_trades(draft)
+        if error:
+            st.error(error)
+        else:
+            symbol = Symbol.objects.filter(code=trade_code).first()
+            if symbol is None:
+                st.error(f"{trade_code} is not in the price database yet.")
+            else:
+                PortfolioTrade.objects.create(
+                    user=user,
+                    symbol=symbol,
+                    side=trade_side.lower(),
+                    shares=int(trade_shares),
+                    price=Decimal(str(trade_price)),
+                    trade_date=trade_date,
+                )
+                st.rerun()
+
+    saved = trade_rows(user)
+    if not saved:
+        st.info("No trades yet. Add a buy to start this portfolio.")
+        return
+    positions, error = combine_trades(saved)
+    if error:
+        st.error(error)
+
+    names = equity_data.sort_values("date").groupby("Code")["display_name"].last().to_dict()
+    open_rows = []
+    realized = Decimal("0")
+    open_value = Decimal("0")
+    open_cost = Decimal("0")
+    for code, state in sorted(positions.items()):
+        realized += state["realized"]
+        if state["shares"] <= 0:
+            continue
+        history = equity_data[equity_data["Code"] == code].sort_values("date")
+        latest = nearest_on_or_before(history, nairobi_today()) if not history.empty else None
+        cost = state["cost"]
+        if latest is None:
+            value = cost
+            close_text = "—"
+            close_date = "—"
+            close_number = None
+        else:
+            close_number = Decimal(str(latest["price"]))
+            value = close_number * state["shares"]
+            close_text = f"{close_number:,.2f}"
+            close_date = f"{latest['date']:%d %b %Y}"
+        profit = value - cost
+        average = cost / state["shares"]
+        open_value += value
+        open_cost += cost
+        open_rows.append({
+            "Code": code,
+            "Company": names.get(code, code),
+            "Shares": state["shares"],
+            "Average cost": float(average),
+            "Latest close": close_text,
+            "Close date": close_date,
+            "Value": float(value),
+            "Profit / loss": float(profit),
+            "Return %": float(profit / cost * 100) if cost else 0,
+            "_close": close_number,
+        })
+    if any(row["_close"] is None for row in open_rows):
+        st.caption("A holding with no official close yet is shown at the price you paid.")
+    if open_rows:
+        show_open = pd.DataFrame(open_rows).drop(columns=["_close"])
+        st.dataframe(
+            show_open.style.format({
+                "Average cost": "{:,.2f}",
+                "Value": "{:,.2f}",
+                "Profit / loss": "{:+,.2f}",
+                "Return %": "{:+.2f}%",
+            }),
+            use_container_width=True,
+            hide_index=True,
+        )
+    total_profit = open_value - open_cost + realized
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Shares still held", f"{sum(row['Shares'] for row in open_rows):,}")
+    m2.metric("Cost of open shares", money(open_cost))
+    m3.metric("Value at latest close", money(open_value))
+    m4.metric("Profit / loss", money(total_profit), delta=pct(float(total_profit / open_cost * 100) if open_cost else 0))
+    if realized:
+        st.caption(f"Profit already taken on sells: {money(realized)}. That amount is included in the profit above.")
+
+    ledger = []
+    for trade in saved:
+        official = official_close(equity_data, trade["code"], trade["trade_date"])
+        paid = float(trade["price"])
+        ledger.append({
+            "Date": trade["trade_date"].strftime("%d %b %Y"),
+            "Side": trade["side"].title(),
+            "Code": trade["code"],
+            "Shares": trade["shares"],
+            "Your price": paid,
+            "Official close": "—" if official is None else f"{official:,.2f}",
+            "Your price minus close": None if official is None else paid - official,
+        })
+    st.markdown("<div class='section-title'>Trades</div>", unsafe_allow_html=True)
+    st.dataframe(
+        pd.DataFrame(ledger).style.format({"Your price": "{:,.2f}", "Your price minus close": "{:+,.2f}"}, na_rep="—"),
+        use_container_width=True,
+        hide_index=True,
+    )
+    labels = {
+        f"{trade['trade_date']:%d %b %Y} · {trade['side'].title()} · {trade['code']} · {trade['shares']} @ {trade['price']}": trade["id"]
+        for trade in saved
+    }
+    remove_label = st.selectbox("Remove a trade", list(labels), key="remove_trade")
+    if st.button("Remove trade"):
+        remaining = [trade for trade in saved if trade["id"] != labels[remove_label]]
+        _positions, remove_error = combine_trades(remaining)
+        if remove_error:
+            st.error(remove_error)
+        else:
+            PortfolioTrade.objects.filter(pk=labels[remove_label], user=user).delete()
+            st.rerun()
+
 def make_line_chart(df, x="date", y="price", color=None, title=None):
     fig = px.line(df, x=x, y=y, color=color, title=title,
                   labels={"date":"Trading date", "price":"Share price (KSh)", "display_name":"Company"})
@@ -175,6 +405,15 @@ def make_line_chart(df, x="date", y="price", color=None, title=None):
     fig.update_xaxes(showgrid=False, linecolor="#dfe6ef")
     fig.update_yaxes(gridcolor="#edf1f6", zeroline=False, tickprefix="KSh ")
     return fig
+
+setup_django()
+try:
+    user = signed_in_user()
+except Exception as exc:
+    st.error(f"Could not reach the account database: {exc}")
+    st.stop()
+if user is None:
+    show_login()
 
 st.markdown("""
 <div class="hero">
@@ -202,6 +441,11 @@ with st.sidebar:
     st.caption(f"{len(data):,} daily records")
     st.caption(f"{data['Code'].nunique()} symbols · {min_date:%d %b %Y} – {max_date:%d %b %Y}")
     st.caption("Prices are the dataset's `Day Price` field.")
+    st.markdown("---")
+    st.caption(f"Signed in as {user.username}")
+    if st.button("Log out"):
+        st.session_state.pop("user_id", None)
+        st.rerun()
     st.markdown("---")
     st.caption("For research and education. Historical performance is not a forecast.")
 
@@ -253,145 +497,147 @@ if mode == "Single stock":
                           yaxis_title="Price (KSh)", xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
 
-    with st.container():
-        st.markdown('<span class="invest-anchor"></span>', unsafe_allow_html=True)
-        st.markdown("<div class='section-title'>What if you had invested?</div>", unsafe_allow_html=True)
-        st.caption("Buy and sell at the nearest recorded close on or before each date. The sell date starts at the latest date in the data. Fees, taxes and dividends are not included.")
-        default_purchase = max(min_date, min(pd.Timestamp("2024-10-28").date(), max_date))
-        inv1, inv2, inv3 = st.columns(3)
-        with inv1:
-            investment = st.number_input("Investment amount (KSh)", min_value=100.0, value=1_000_000.0, step=50_000.0, format="%.2f", key="one_amount")
-        with inv2:
-            purchase_date = st.date_input("Purchase date", value=default_purchase, min_value=min_date, max_value=max_date, key="one_buy")
-        with inv3:
-            sell_date = st.date_input("Sell date", value=max_date, min_value=min_date, max_value=max_date, key="one_sell")
-        result, reason = holding_result(hist, investment, purchase_date, sell_date)
-        if result is None:
-            st.warning(reason)
-        else:
-            r1, r2 = st.columns(2)
-            with r1:
-                st.markdown(f"**Purchase price used:** {price_fmt(result['buy_price'])} · {result['buy_date']:%d %b %Y}")
-                st.markdown(f"**Sale price used:** {price_fmt(result['sell_price'])} · {result['sell_date']:%d %b %Y}")
-                st.markdown(f"**Shares bought:** {result['shares']:,}")
-            with r2:
-                st.markdown(f"**Cash left over:** {money(result['cash_left'])}")
-                st.markdown(f"**Value of shares at sale:** {money(result['value'])}")
-                st.markdown(f"**Profit / loss:** {money(result['gain'])} ({pct(result['gain_pct'])})")
-            st.progress(max(0.0, min(1.0, (result["gain_pct"] + 100) / 500)), text="Return visual (scale capped at +400%; loss below -100% is not possible for an unleveraged share)")
+    earned_tab, portfolio_tab = st.tabs(["What you would have earned", "My portfolio"])
+    with earned_tab:
+        with st.container():
+            st.markdown('<span class="invest-anchor"></span>', unsafe_allow_html=True)
+            st.markdown("<div class='section-title'>What if you had invested?</div>", unsafe_allow_html=True)
+            st.caption("Buy and sell at the nearest recorded close on or before each date. The sell date starts at the latest date in the data. Fees, taxes and dividends are not included.")
+            default_purchase = max(min_date, min(pd.Timestamp("2024-10-28").date(), max_date))
+            inv1, inv2, inv3 = st.columns(3)
+            with inv1:
+                investment = st.number_input("Investment amount (KSh)", min_value=100.0, value=1_000_000.0, step=50_000.0, format="%.2f", key="one_amount")
+            with inv2:
+                purchase_date = st.date_input("Purchase date", value=default_purchase, min_value=min_date, max_value=max_date, key="one_buy")
+            with inv3:
+                sell_date = st.date_input("Sell date", value=max_date, min_value=min_date, max_value=max_date, key="one_sell")
+            result, reason = holding_result(hist, investment, purchase_date, sell_date)
+            if result is None:
+                st.warning(reason)
+            else:
+                r1, r2 = st.columns(2)
+                with r1:
+                    st.markdown(f"**Purchase price used:** {price_fmt(result['buy_price'])} · {result['buy_date']:%d %b %Y}")
+                    st.markdown(f"**Sale price used:** {price_fmt(result['sell_price'])} · {result['sell_date']:%d %b %Y}")
+                    st.markdown(f"**Shares bought:** {result['shares']:,}")
+                with r2:
+                    st.markdown(f"**Cash left over:** {money(result['cash_left'])}")
+                    st.markdown(f"**Value of shares at sale:** {money(result['value'])}")
+                    st.markdown(f"**Profit / loss:** {money(result['gain'])} ({pct(result['gain_pct'])})")
+                st.progress(max(0.0, min(1.0, (result["gain_pct"] + 100) / 500)), text="Return visual (scale capped at +400%; loss below -100% is not possible for an unleveraged share)")
 
-        st.markdown("<div class='section-title'>A portfolio</div>", unsafe_allow_html=True)
-        st.caption("Split a pot across several stocks. Each holding uses whole shares. Cash you do not spend is still cash, and the profit is the change in the shares.")
-        pf1, pf2, pf3 = st.columns(3)
-        with pf1:
-            pot = st.number_input("Amount to invest (KSh)", min_value=100.0, value=100_000.0, step=10_000.0, format="%.2f", key="pot")
-        with pf2:
-            portfolio_purchase = st.date_input("Purchase date", value=default_purchase, min_value=min_date, max_value=max_date, key="pf_buy")
-        with pf3:
-            portfolio_sell = st.date_input("Sell date", value=max_date, min_value=min_date, max_value=max_date, key="pf_sell")
-        portfolio_defaults = [code for code in ["DTK", "SCOM", "EQTY", "KCB"] if code in symbols]
-        if not portfolio_defaults:
-            portfolio_defaults = symbols[:3]
-        chosen = st.multiselect("Stocks in the mix", symbols, default=portfolio_defaults[:4], max_selections=8)
-        holdings = []
-        if not chosen:
-            st.info("Choose at least one stock.")
-        else:
-            share = float(pot) / len(chosen)
-            alloc_cols = st.columns(min(4, len(chosen)))
-            allocations = {}
-            for index, code in enumerate(chosen):
-                with alloc_cols[index % 4]:
-                    allocations[code] = st.number_input(
-                        f"{code} (KSh)",
-                        min_value=0.0,
-                        value=float(share),
-                        step=1_000.0,
-                        format="%.2f",
-                        key=f"alloc_{code}",
+            st.markdown("<div class='section-title'>A portfolio</div>", unsafe_allow_html=True)
+            st.caption("Split a pot across several stocks. Each holding uses whole shares. Cash you do not spend is still cash, and the profit is the change in the shares.")
+            pf1, pf2, pf3 = st.columns(3)
+            with pf1:
+                pot = st.number_input("Amount to invest (KSh)", min_value=100.0, value=100_000.0, step=10_000.0, format="%.2f", key="pot")
+            with pf2:
+                portfolio_purchase = st.date_input("Purchase date", value=default_purchase, min_value=min_date, max_value=max_date, key="pf_buy")
+            with pf3:
+                portfolio_sell = st.date_input("Sell date", value=max_date, min_value=min_date, max_value=max_date, key="pf_sell")
+            portfolio_defaults = [code for code in ["DTK", "SCOM", "EQTY", "KCB"] if code in symbols]
+            if not portfolio_defaults:
+                portfolio_defaults = symbols[:3]
+            chosen = st.multiselect("Stocks in the mix", symbols, default=portfolio_defaults[:4], max_selections=8)
+            holdings = []
+            if not chosen:
+                st.info("Choose at least one stock.")
+            else:
+                share = float(pot) / len(chosen)
+                alloc_cols = st.columns(min(4, len(chosen)))
+                allocations = {}
+                for index, code in enumerate(chosen):
+                    with alloc_cols[index % 4]:
+                        allocations[code] = st.number_input(
+                            f"{code} (KSh)",
+                            min_value=0.0,
+                            value=float(share),
+                            step=1_000.0,
+                            format="%.2f",
+                            key=f"alloc_{code}",
+                        )
+                allocated = sum(allocations.values())
+                notes = []
+                for code in chosen:
+                    amount = allocations[code]
+                    if amount <= 0:
+                        notes.append(f"{code} has no money allocated.")
+                        continue
+                    series = equity_data[equity_data["Code"] == code].sort_values("date")
+                    outcome, outcome_reason = holding_result(series, amount, portfolio_purchase, portfolio_sell)
+                    name = series["display_name"].iloc[-1] if not series.empty else code
+                    if outcome is None:
+                        notes.append(f"{code}: {outcome_reason}")
+                        continue
+                    holdings.append({"Code": code, "Company": name, "Amount": amount, **outcome})
+                unallocated = pot - allocated
+                if allocated > pot + 0.01:
+                    st.warning(f"The mix adds up to {money(allocated)}, which is {money(allocated - pot)} more than the pot.")
+                elif unallocated > 0.01:
+                    st.caption(f"Allocated {money(allocated)}. {money(unallocated)} of the pot is still unallocated cash.")
+                if notes:
+                    st.warning(" ".join(notes))
+                if holdings:
+                    table = pd.DataFrame(holdings)
+                    table = table.sort_values(["gain", "gain_pct"], ascending=False)
+                    table.insert(0, "Rank", range(1, len(table) + 1))
+                    show_table = table.rename(columns={
+                        "buy_price": "Buy price",
+                        "sell_price": "Sell price",
+                        "buy_date": "Bought",
+                        "sell_date": "Sold",
+                        "shares": "Shares",
+                        "cash_left": "Cash left",
+                        "value": "Share value",
+                        "gain": "Profit / loss",
+                        "gain_pct": "Return %",
+                    })
+                    show_table["Bought"] = pd.to_datetime(show_table["Bought"]).dt.strftime("%d %b %Y")
+                    show_table["Sold"] = pd.to_datetime(show_table["Sold"]).dt.strftime("%d %b %Y")
+                    show_table = show_table[["Rank", "Code", "Company", "Amount", "Shares", "Bought", "Buy price", "Sold", "Sell price", "Share value", "Cash left", "Profit / loss", "Return %"]]
+                    st.dataframe(
+                        show_table.style.format({
+                            "Amount": "{:,.2f}",
+                            "Buy price": "{:,.2f}",
+                            "Sell price": "{:,.2f}",
+                            "Share value": "{:,.2f}",
+                            "Cash left": "{:,.2f}",
+                            "Profit / loss": "{:+,.2f}",
+                            "Return %": "{:+.2f}%",
+                        }),
+                        use_container_width=True,
+                        hide_index=True,
                     )
-            allocated = sum(allocations.values())
-            notes = []
-            for code in chosen:
-                amount = allocations[code]
-                if amount <= 0:
-                    notes.append(f"{code} has no money allocated.")
-                    continue
-                series = equity_data[equity_data["Code"] == code].sort_values("date")
-                outcome, outcome_reason = holding_result(series, amount, portfolio_purchase, portfolio_sell)
-                name = series["display_name"].iloc[-1] if not series.empty else code
-                if outcome is None:
-                    notes.append(f"{code}: {outcome_reason}")
-                    continue
-                holdings.append({"Code": code, "Company": name, "Amount": amount, **outcome})
-            unallocated = pot - allocated
-            if allocated > pot + 0.01:
-                st.warning(f"The mix adds up to {money(allocated)}, which is {money(allocated - pot)} more than the pot.")
-            elif unallocated > 0.01:
-                st.caption(f"Allocated {money(allocated)}. {money(unallocated)} of the pot is still unallocated cash.")
-            if notes:
-                st.warning(" ".join(notes))
-            if holdings:
-                table = pd.DataFrame(holdings)
-                table = table.sort_values(["gain", "gain_pct"], ascending=False)
-                table.insert(0, "Rank", range(1, len(table) + 1))
-                show_table = table.rename(columns={
-                    "buy_price": "Buy price",
-                    "sell_price": "Sell price",
-                    "buy_date": "Bought",
-                    "sell_date": "Sold",
-                    "shares": "Shares",
-                    "cash_left": "Cash left",
-                    "value": "Share value",
-                    "gain": "Profit / loss",
-                    "gain_pct": "Return %",
-                })
-                show_table["Bought"] = pd.to_datetime(show_table["Bought"]).dt.strftime("%d %b %Y")
-                show_table["Sold"] = pd.to_datetime(show_table["Sold"]).dt.strftime("%d %b %Y")
-                show_table = show_table[["Rank", "Code", "Company", "Amount", "Shares", "Bought", "Buy price", "Sold", "Sell price", "Share value", "Cash left", "Profit / loss", "Return %"]]
-                st.dataframe(
-                    show_table.style.format({
-                        "Amount": "{:,.2f}",
-                        "Buy price": "{:,.2f}",
-                        "Sell price": "{:,.2f}",
-                        "Share value": "{:,.2f}",
-                        "Cash left": "{:,.2f}",
-                        "Profit / loss": "{:+,.2f}",
-                        "Return %": "{:+.2f}%",
-                    }),
-                    use_container_width=True,
-                    hide_index=True,
-                )
-                share_value = float(table["value"].sum())
-                rounding_cash = float(table["cash_left"].sum())
-                placed = float(table["Amount"].sum())
-                unplaced = allocated - placed
-                cash_held = rounding_cash + unplaced + max(unallocated, 0)
-                wealth = share_value + cash_held
-                basis = pot if unallocated >= -0.01 else allocated
-                gain = wealth - basis
-                gain_pct = (gain / basis * 100) if basis else 0
-                t1, t2, t3, t4 = st.columns(4)
-                t1.metric("Spent on shares", money(placed - rounding_cash))
-                t2.metric("Cash still held", money(cash_held))
-                t3.metric("Wealth at sale", money(wealth))
-                t4.metric("Portfolio profit / loss", money(gain), delta=pct(gain_pct))
-                rank_chart = table.sort_values("gain_pct")
-                fig = px.bar(
-                    rank_chart, x="gain_pct", y="Code", orientation="h",
-                    hover_data=["Company", "gain"],
-                    labels={"gain_pct": "Return (%)", "Code": ""},
-                    title="Ranked by return",
-                )
-                fig.update_layout(
-                    template="plotly_white", height=max(220, 46 * len(rank_chart) + 80),
-                    margin=dict(l=8, r=8, t=48, b=8), paper_bgcolor="rgba(0,0,0,0)",
-                    title_font=dict(size=16, color="#17243b"),
-                )
-                fig.update_xaxes(ticksuffix="%", gridcolor="#edf1f6")
-                st.plotly_chart(fig, use_container_width=True)
-    with st.expander("How to read this"):
-        st.markdown("""
+                    share_value = float(table["value"].sum())
+                    rounding_cash = float(table["cash_left"].sum())
+                    placed = float(table["Amount"].sum())
+                    unplaced = allocated - placed
+                    cash_held = rounding_cash + unplaced + max(unallocated, 0)
+                    wealth = share_value + cash_held
+                    basis = pot if unallocated >= -0.01 else allocated
+                    gain = wealth - basis
+                    gain_pct = (gain / basis * 100) if basis else 0
+                    t1, t2, t3, t4 = st.columns(4)
+                    t1.metric("Spent on shares", money(placed - rounding_cash))
+                    t2.metric("Cash still held", money(cash_held))
+                    t3.metric("Wealth at sale", money(wealth))
+                    t4.metric("Portfolio profit / loss", money(gain), delta=pct(gain_pct))
+                    rank_chart = table.sort_values("gain_pct")
+                    fig = px.bar(
+                        rank_chart, x="gain_pct", y="Code", orientation="h",
+                        hover_data=["Company", "gain"],
+                        labels={"gain_pct": "Return (%)", "Code": ""},
+                        title="Ranked by return",
+                    )
+                    fig.update_layout(
+                        template="plotly_white", height=max(220, 46 * len(rank_chart) + 80),
+                        margin=dict(l=8, r=8, t=48, b=8), paper_bgcolor="rgba(0,0,0,0)",
+                        title_font=dict(size=16, color="#17243b"),
+                    )
+                    fig.update_xaxes(ticksuffix="%", gridcolor="#edf1f6")
+                    st.plotly_chart(fig, use_container_width=True)
+        with st.expander("How to read this"):
+            st.markdown("""
 - **Latest recorded price** is the last date present in your files, not a live market quote.
 - **Change vs previous record** compares the last row with the previous row for that company.
 - **Purchase date** and **sell date** each use the nearest recorded close on or before that day. The sell date starts at the latest date in the data.
@@ -399,6 +645,8 @@ if mode == "Single stock":
 - The portfolio ranks each stock by profit, then adds the holdings into one result. Unallocated cash stays cash.
 - Dividends and corporate actions are not included because the supplied `Adjusted Price` column is entirely `-`.
 """)
+    with portfolio_tab:
+        render_portfolio(user, equity_data, symbols, min_date, max_date)
     with st.expander("View recent records"):
         show = filtered.tail(50)[["date","Code","display_name","price","day_low","day_high","volume"]].copy()
         show.columns = ["Date","Code","Company","Day price (KSh)","Day low","Day high","Volume"]

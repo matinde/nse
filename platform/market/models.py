@@ -1,3 +1,7 @@
+from decimal import Decimal
+
+from django.conf import settings
+from django.core.validators import MinValueValidator
 from django.db import models
 
 
@@ -67,3 +71,35 @@ class IngestRun(models.Model):
 
     def __str__(self):
         return f"{self.kind} {self.status} {self.started_at:%Y-%m-%d %H:%M}"
+
+
+class PortfolioTrade(models.Model):
+    SIDE_BUY = "buy"
+    SIDE_SELL = "sell"
+    SIDE_CHOICES = [
+        (SIDE_BUY, "Buy"),
+        (SIDE_SELL, "Sell"),
+    ]
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="portfolio_trades",
+    )
+    symbol = models.ForeignKey(Symbol, on_delete=models.PROTECT, related_name="portfolio_trades")
+    side = models.CharField(max_length=8, choices=SIDE_CHOICES)
+    shares = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+    price = models.DecimalField(
+        max_digits=14,
+        decimal_places=4,
+        validators=[MinValueValidator(Decimal("0.0001"))],
+    )
+    trade_date = models.DateField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["trade_date", "id"]
+        indexes = [models.Index(fields=["user", "trade_date"], name="market_trade_user_date_idx")]
+
+    def __str__(self):
+        return f"{self.user} {self.side} {self.symbol.code} {self.shares}@{self.price}"
