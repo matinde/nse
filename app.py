@@ -134,6 +134,18 @@ def nearest_on_or_before(history, date):
         return None
     return before.iloc[-1]
 
+def split_amount(total, codes):
+    """Divide a cash total across codes so the parts add back to the total."""
+    codes = list(codes)
+    if not codes:
+        return {}
+    cents = int(round(float(total) * 100))
+    base, remainder = divmod(cents, len(codes))
+    return {
+        code: (base + (1 if index < remainder else 0)) / 100
+        for index, code in enumerate(codes)
+    }
+
 def holding_result(history, amount, purchase_date, sell_date):
     """Whole shares bought at the close on or before purchase, valued at the close on or before sale."""
     if sell_date < purchase_date:
@@ -527,7 +539,7 @@ if mode == "Single stock":
                 st.progress(max(0.0, min(1.0, (result["gain_pct"] + 100) / 500)), text="Return visual (scale capped at +400%; loss below -100% is not possible for an unleveraged share)")
 
             st.markdown("<div class='section-title'>A portfolio</div>", unsafe_allow_html=True)
-            st.caption("Split a pot across several stocks. Each holding uses whole shares. Cash you do not spend is still cash, and the profit is the change in the shares.")
+            st.caption("The amount is split evenly across the stocks you pick. Change the amount and the split updates. To give one stock more, move cash out of another. The total stays the same.")
             pf1, pf2, pf3 = st.columns(3)
             with pf1:
                 pot = st.number_input("Amount to invest (KSh)", min_value=100.0, value=100_000.0, step=10_000.0, format="%.2f", key="pot")
@@ -543,7 +555,19 @@ if mode == "Single stock":
             if not chosen:
                 st.info("Choose at least one stock.")
             else:
-                share = float(pot) / len(chosen)
+                signature = (round(float(pot), 2), tuple(chosen))
+                if st.session_state.get("alloc_signature") != signature:
+                    for code, amount in split_amount(pot, chosen).items():
+                        st.session_state[f"alloc_{code}"] = amount
+                    st.session_state["alloc_signature"] = signature
+                elif "pending_move" in st.session_state:
+                    source, destination, moved = st.session_state.pop("pending_move")
+                    source_key = f"alloc_{source}"
+                    destination_key = f"alloc_{destination}"
+                    available = float(st.session_state.get(source_key, 0))
+                    moved = min(max(float(moved), 0), available)
+                    st.session_state[source_key] = round(available - moved, 2)
+                    st.session_state[destination_key] = round(float(st.session_state.get(destination_key, 0)) + moved, 2)
                 alloc_cols = st.columns(min(4, len(chosen)))
                 allocations = {}
                 for index, code in enumerate(chosen):
@@ -551,11 +575,31 @@ if mode == "Single stock":
                         allocations[code] = st.number_input(
                             f"{code} (KSh)",
                             min_value=0.0,
-                            value=float(share),
                             step=1_000.0,
                             format="%.2f",
                             key=f"alloc_{code}",
                         )
+                if len(chosen) > 1:
+                    st.markdown("**Move cash**")
+                    move_from, move_to, move_amt = st.columns(3)
+                    with move_from:
+                        take_from = st.selectbox("Take from", chosen, key="move_from")
+                    destinations = [code for code in chosen if code != take_from]
+                    if st.session_state.get("move_to") not in destinations:
+                        st.session_state["move_to"] = destinations[0]
+                    with move_to:
+                        add_to = st.selectbox("Add to", destinations, key="move_to")
+                    with move_amt:
+                        move_amount = st.number_input("Amount to move (KSh)", min_value=0.0, step=1_000.0, format="%.2f", key="move_amount")
+                    if st.button("Move", key="move_cash"):
+                        available = float(allocations[take_from])
+                        if move_amount <= 0:
+                            st.warning("Enter an amount to move.")
+                        elif move_amount > available + 0.001:
+                            st.error(f"{take_from} only has {money(available)}.")
+                        else:
+                            st.session_state["pending_move"] = (take_from, add_to, float(move_amount))
+                            st.rerun()
                 allocated = sum(allocations.values())
                 notes = []
                 for code in chosen:
@@ -642,7 +686,7 @@ if mode == "Single stock":
 - **Change vs previous record** compares the last row with the previous row for that company.
 - **Purchase date** and **sell date** each use the nearest recorded close on or before that day. The sell date starts at the latest date in the data.
 - Shares are bought in whole shares. Cash that cannot buy another share is still cash, so it is not a loss.
-- The portfolio ranks each stock by profit, then adds the holdings into one result. Unallocated cash stays cash.
+- Changing the portfolio amount splits it evenly across the chosen stocks. Move cash takes money from one stock and adds the same amount to another.
 - Dividends and corporate actions are not included because the supplied `Adjusted Price` column is entirely `-`.
 """)
     with portfolio_tab:
