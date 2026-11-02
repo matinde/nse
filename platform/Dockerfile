@@ -8,8 +8,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DJANGO_SETTINGS_MODULE=config.settings
 
 COPY platform/requirements.txt .
-RUN pip install --upgrade pip && \
-    pip install --retries 10 --timeout 120 -r requirements.txt
+RUN apt-get update && apt-get install -y --no-install-recommends nginx \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --upgrade pip \
+    && pip install --retries 10 --timeout 120 -r requirements.txt
 
 COPY platform/ .
 COPY data/ /app/seed-data/

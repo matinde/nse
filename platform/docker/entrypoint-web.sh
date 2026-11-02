@@ -19,6 +19,8 @@ python manage.py collectstatic --noinput
 echo "Importing price CSV files from ${DATA_DIR:-/app/data}"
 python manage.py import_csvs
 echo "Starting operator admin on port 9012"
-gunicorn config.wsgi:application --bind 0.0.0.0:9012 --workers 2 --timeout 120 --access-logfile - --error-logfile - &
-echo "Starting chart on port ${PORT:-9011}"
-exec streamlit run app.py --server.address 0.0.0.0 --server.port "${PORT:-9011}" --server.headless true --server.enableCORS false --server.enableXsrfProtection false --server.fileWatcherType none
+gunicorn config.wsgi:application --bind 127.0.0.1:9012 --workers 2 --timeout 120 --access-logfile - --error-logfile - &
+echo "Starting chart on port 9013"
+streamlit run app.py --server.address 127.0.0.1 --server.port 9013 --server.headless true --server.enableCORS false --server.enableXsrfProtection false --server.fileWatcherType none &
+echo "Starting public proxy on port 9011"
+exec nginx -c /app/docker/nginx.conf -g "daemon off;"
