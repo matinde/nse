@@ -40,7 +40,7 @@ services:
       DJANGO_DEBUG: ${DJANGO_DEBUG:-False}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
       DATA_DIR: /app/data
-      CSRF_TRUSTED_ORIGINS: ${SERVICE_URL_WEB_9011:-http://localhost:9011}
+      CSRF_TRUSTED_ORIGINS: ${SERVICE_URL_WEB_9011:-http://localhost:9011},${SERVICE_URL_WEB_9012:-http://localhost:9012}
     volumes:
       - ./data:/app/data
     ports:
