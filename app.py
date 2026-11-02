@@ -41,6 +41,17 @@ div[data-testid="stMetric"] {
 div[data-testid="stMetricLabel"] { color:#63728a; }
 div[data-testid="stMetricValue"] { color:#17243b; }
 div[data-testid="stMetricDelta"] { font-weight:650; }
+.fit-stat {
+  background: white; border: 1px solid #e5eaf2; border-radius: 16px;
+  padding: 12px 14px; min-height: 88px;
+  box-shadow: 0 3px 12px rgba(16,27,45,.035);
+}
+.fit-label { color: #63728a; font-size: .82rem; font-weight: 650; }
+.fit-value {
+  color: #17243b; font-size: 1.05rem; font-weight: 750;
+  line-height: 1.3; overflow-wrap: anywhere; margin-top: .28rem;
+}
+.fit-delta { font-size: .85rem; font-weight: 650; margin-top: .15rem; }
 div[data-testid="stTabs"] button { font-weight:650; }
 div[data-testid="stAlert"] { border-radius:12px; }
 .invest-anchor { display:none; }
@@ -127,6 +138,17 @@ def price_fmt(v):
     if abs(v) < 1:
         return f"KSh {v:.3f}"
     return f"KSh {v:,.2f}"
+
+def fit_stat(label, value, delta=None):
+    delta_html = ""
+    if delta:
+        color = "#0f7b4c" if str(delta).strip().startswith("+") else "#b42318"
+        delta_html = f"<div class='fit-delta' style='color:{color}'>{delta}</div>"
+    st.markdown(
+        f"<div class='fit-stat'><div class='fit-label'>{label}</div>"
+        f"<div class='fit-value'>{value}</div>{delta_html}</div>",
+        unsafe_allow_html=True,
+    )
 
 def nearest_on_or_before(history, date):
     before = history[history["date"] <= pd.Timestamp(date)]
@@ -364,10 +386,14 @@ def render_portfolio(user, equity_data, symbols, min_date, max_date):
         )
     total_profit = open_value - open_cost + realized
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Shares still held", f"{sum(row['Shares'] for row in open_rows):,}")
-    m2.metric("Cost of open shares", money(open_cost))
-    m3.metric("Value at latest close", money(open_value))
-    m4.metric("Profit / loss", money(total_profit), delta=pct(float(total_profit / open_cost * 100) if open_cost else 0))
+    with m1:
+        fit_stat("Shares still held", f"{sum(row['Shares'] for row in open_rows):,}")
+    with m2:
+        fit_stat("Cost of open shares", money(open_cost))
+    with m3:
+        fit_stat("Value at latest close", money(open_value))
+    with m4:
+        fit_stat("Profit / loss", money(total_profit), pct(float(total_profit / open_cost * 100) if open_cost else 0))
     if realized:
         st.caption(f"Profit already taken on sells: {money(realized)}. That amount is included in the profit above.")
 
@@ -662,10 +688,14 @@ if mode == "Single stock":
                     gain = wealth - basis
                     gain_pct = (gain / basis * 100) if basis else 0
                     t1, t2, t3, t4 = st.columns(4)
-                    t1.metric("Spent on shares", money(placed - rounding_cash))
-                    t2.metric("Cash still held", money(cash_held))
-                    t3.metric("Wealth at sale", money(wealth))
-                    t4.metric("Portfolio profit / loss", money(gain), delta=pct(gain_pct))
+                    with t1:
+                        fit_stat("Spent on shares", money(placed - rounding_cash))
+                    with t2:
+                        fit_stat("Cash still held", money(cash_held))
+                    with t3:
+                        fit_stat("Wealth at sale", money(wealth))
+                    with t4:
+                        fit_stat("Portfolio profit / loss", money(gain), pct(gain_pct))
                     rank_chart = table.sort_values("gain_pct")
                     fig = px.bar(
                         rank_chart, x="gain_pct", y="Code", orientation="h",
