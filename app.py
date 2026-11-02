@@ -279,7 +279,7 @@ def official_close(equity_data, code, day):
 
 def render_portfolio(user, equity_data, symbols, min_date, max_date):
     from market.models import PortfolioTrade, Symbol
-    from market.services.portfolio import combine_trades
+    from market.services.portfolio import combine_trades, held_intervals
 
     st.markdown("<div class='section-title'>My portfolio</div>", unsafe_allow_html=True)
     st.caption("These trades are saved to your account. Holdings are valued at the latest official close. A price you type can differ from that close.")
@@ -397,6 +397,19 @@ def render_portfolio(user, equity_data, symbols, min_date, max_date):
     if realized:
         st.caption(f"Profit already taken on sells: {money(realized)}. That amount is included in the profit above.")
 
+    real_bands = []
+    for code, opened, closed in held_intervals(saved, max_date):
+        real_bands.append((names.get(code, code), opened, closed, None))
+    show_holding_chart(
+        equity_data,
+        sorted({trade["code"] for trade in saved}),
+        min_date,
+        max_date,
+        real_bands,
+        "real_range",
+        "Each line starts at 100 on the first date in the range. Drag the range across the dates we have. Each shaded band is the time that stock was held. A stock you still hold is shaded through the latest close.",
+    )
+
     ledger = []
     for trade in saved:
         official = official_close(equity_data, trade["code"], trade["trade_date"])
@@ -443,6 +456,87 @@ def make_line_chart(df, x="date", y="price", color=None, title=None):
     fig.update_xaxes(showgrid=False, linecolor="#dfe6ef")
     fig.update_yaxes(gridcolor="#edf1f6", zeroline=False, tickprefix="KSh ")
     return fig
+
+def _rgba(color, alpha=0.2):
+    text = str(color or "#087f8c").strip()
+    if text.startswith("rgba"):
+        return text
+    if text.startswith("rgb"):
+        inner = text[text.find("(") + 1:text.rfind(")")]
+        parts = [part.strip() for part in inner.split(",")[:3]]
+        return f"rgba({','.join(parts)},{alpha})"
+    hex_color = text.lstrip("#")
+    if len(hex_color) == 3:
+        hex_color = "".join(character * 2 for character in hex_color)
+    red, green, blue = int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16)
+    return f"rgba({red},{green},{blue},{alpha})"
+
+def shade_band(fig, start, end, color):
+    if start is None or end is None or pd.Timestamp(end) < pd.Timestamp(start):
+        return
+    fig.add_vrect(
+        x0=pd.Timestamp(start),
+        x1=pd.Timestamp(end),
+        fillcolor=color,
+        layer="below",
+        line_width=0,
+    )
+
+def price_path_chart(frame, title, bands):
+    """Price lines over a chosen window. bands are (name, start, end, color)."""
+    fig = px.line(
+        frame, x="date", y="indexed", color="display_name", title=title,
+        labels={"date": "Trading date", "indexed": "Price path (starts at 100)", "display_name": "Company"},
+    )
+    fig.update_layout(
+        template="plotly_white", height=420, margin=dict(l=12, r=12, t=54, b=12),
+        legend_title_text="", hovermode="x unified",
+        title_font=dict(size=17, color="#17243b"),
+        paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="white",
+        font=dict(family="Inter, Arial, sans-serif", color="#334155"),
+    )
+    fig.update_xaxes(showgrid=False, linecolor="#dfe6ef")
+    fig.update_yaxes(gridcolor="#edf1f6", zeroline=False)
+    color_by_name = {trace.name: trace.line.color for trace in fig.data}
+    drawn = set()
+    for name, start, end, color in bands:
+        key = (name, str(start), str(end))
+        if key in drawn:
+            continue
+        drawn.add(key)
+        shade_band(fig, start, end, color or _rgba(color_by_name.get(name), 0.2))
+    return fig
+
+def show_holding_chart(equity_data, codes, min_date, max_date, bands, slider_key, caption):
+    st.markdown("<div class='section-title'>Price path</div>", unsafe_allow_html=True)
+    st.caption(caption)
+    start_date, end_date = st.slider(
+        "Graph date range",
+        min_value=min_date,
+        max_value=max_date,
+        value=(min_date, max_date),
+        format="DD MMM YYYY",
+        key=slider_key,
+    )
+    if start_date > end_date:
+        st.error("The graph start must be on or before the end.")
+        return
+    window = equity_data[
+        equity_data["Code"].isin(list(codes))
+        & (equity_data["date"].dt.date >= start_date)
+        & (equity_data["date"].dt.date <= end_date)
+    ].copy()
+    if window.empty:
+        st.info("No prices in that date range for these stocks.")
+        return
+    window = window.sort_values(["Code", "date"])
+    window["base_price"] = window.groupby("Code")["price"].transform("first")
+    window = window[window["base_price"] > 0]
+    if window.empty:
+        st.info("No prices in that date range for these stocks.")
+        return
+    window["indexed"] = window["price"] / window["base_price"] * 100
+    st.plotly_chart(price_path_chart(window, "Share prices across the dates you chose", bands), use_container_width=True)
 
 setup_django()
 try:
@@ -710,6 +804,18 @@ if mode == "Single stock":
                     )
                     fig.update_xaxes(ticksuffix="%", gridcolor="#edf1f6")
                     st.plotly_chart(fig, use_container_width=True)
+                estimate_bands = []
+                if portfolio_sell >= portfolio_purchase:
+                    estimate_bands = [("Held", portfolio_purchase, portfolio_sell, "rgba(8,127,140,0.22)")]
+                show_holding_chart(
+                    equity_data,
+                    chosen,
+                    min_date,
+                    max_date,
+                    estimate_bands,
+                    "estimate_range",
+                    "Each line starts at 100 on the first date in the range. Drag the range across the dates we have. The shaded band is the purchase date through the sell date.",
+                )
         with st.expander("How to read this"):
             st.markdown("""
 - **Latest recorded price** is the last date present in your files, not a live market quote.

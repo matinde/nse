@@ -37,3 +37,35 @@ def combine_trades(trades):
         if state["shares"] == 0:
             state["cost"] = Decimal("0")
     return positions, None
+
+
+def held_intervals(trades, as_of):
+    """Periods when each stock was held, from the buy that opened it to the sell that closed it.
+
+    A position still open runs through as_of.
+    """
+    ordered = sorted(
+        trades,
+        key=lambda trade: (trade["trade_date"], trade["id"] if trade["id"] is not None else 10**12),
+    )
+    grouped = {}
+    for trade in ordered:
+        grouped.setdefault(trade["code"], []).append(trade)
+    spans = []
+    for code, rows in grouped.items():
+        shares = 0
+        opened = None
+        for trade in rows:
+            before = shares
+            if trade["side"] == "buy":
+                shares += int(trade["shares"])
+            else:
+                shares = max(0, shares - int(trade["shares"]))
+            if before <= 0 and shares > 0:
+                opened = trade["trade_date"]
+            elif before > 0 and shares <= 0 and opened is not None:
+                spans.append((code, opened, trade["trade_date"]))
+                opened = None
+        if opened is not None and shares > 0:
+            spans.append((code, opened, as_of))
+    return spans
