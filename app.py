@@ -88,6 +88,17 @@ div[data-testid="stCustomComponentV1"] {
   overflow: hidden;
 }
 .chat-anchor { display: none; }
+.writing { color: #087f8c; font-weight: 650; font-size: .92rem; margin: .35rem 0 .6rem; }
+.writing span {
+  display: inline-block; width: .38rem; height: .38rem; margin-left: .22rem;
+  border-radius: 50%; background: #087f8c; animation: nse-write 1s infinite ease-in-out;
+}
+.writing span:nth-child(2) { animation-delay: .15s; }
+.writing span:nth-child(3) { animation-delay: .3s; }
+@keyframes nse-write {
+  0%, 80%, 100% { opacity: .25; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-3px); }
+}
 div[data-testid="stTabs"] button { font-weight:650; }
 div[data-testid="stAlert"] { border-radius:12px; }
 .invest-anchor { display:none; }
@@ -631,17 +642,84 @@ def show_holding_chart(equity_data, codes, min_date, max_date, bands, slider_key
     window["indexed"] = window["price"] / window["base_price"] * 100
     st.plotly_chart(price_path_chart(window, "Share prices across the dates you chose", bands), use_container_width=True)
 
+NAME_SKIP = {
+    "bank", "group", "limited", "holdings", "company", "kenya", "plc", "ltd",
+    "the", "and", "east", "africa", "ord", "pref", "new", "co",
+}
+
+def name_tokens(text):
+    cleaned = str(text or "").lower()
+    cleaned = re.sub(r"\s*&\s*", "", cleaned)
+    cleaned = cleaned.replace("co-op", "coop").replace("co op", "coop")
+    return re.findall(r"[a-z0-9]+", cleaned)
+
+ALSO_CALLED = {
+    "DTK": "diamond trust",
+    "EABL": "east african breweries",
+    "BAT": "british american tobacco",
+    "SCBK": "standard chartered stanchart",
+    "ABSA": "barclays",
+    "HFCK": "housing finance",
+    "KCB": "commercial",
+    "KNRE": "reinsurance",
+    "NSE": "nairobi securities exchange",
+    "TPSE": "serena",
+    "SCAN": "scangroup",
+    "IMH": "im",
+}
+
+def stocks_named_in(question, directory):
+    asked = [token for token in name_tokens(question) if token not in NAME_SKIP]
+    asked_set = set(asked)
+    hits = []
+    for code, name in directory:
+        extra = ALSO_CALLED.get(code, "")
+        code_words = set(name_tokens(code))
+        words = [
+            token for token in name_tokens(name)
+            if len(token) >= 3 and token not in NAME_SKIP
+        ]
+        words.extend(
+            token for token in name_tokens(extra)
+            if len(token) >= 2 and token not in NAME_SKIP
+        )
+        if code_words & asked_set or any(token in asked_set for token in words):
+            hits.append(code)
+            continue
+        if any(
+            len(token) >= 4 and any(
+                word.startswith(token) or token.startswith(word)
+                for word in asked
+                if len(word) >= 4
+            )
+            for token in words
+        ):
+            hits.append(code)
+    if not ({"pref", "preference", "p4", "p7"} & asked_set):
+        ordinary = [code for code in hits if "-p" not in code.lower()]
+        if ordinary:
+            hits = ordinary
+    return hits
+
 def market_context(equity_data, question, focus_code):
-    codes = sorted(equity_data["Code"].astype(str).unique())
-    mentioned = [code for code in codes if re.search(rf"\b{re.escape(code)}\b", question or "", flags=re.I)]
-    if focus_code and focus_code not in mentioned:
-        mentioned.insert(0, focus_code)
-    mentioned = mentioned[:3]
+    directory = (
+        equity_data.sort_values("date")
+        .groupby("Code")["display_name"]
+        .last()
+        .sort_index()
+    )
+    pairs = [(str(code), str(name)) for code, name in directory.items()]
+    mentioned = stocks_named_in(question, pairs)
+    if focus_code and str(focus_code) not in mentioned:
+        mentioned.insert(0, str(focus_code))
+    mentioned = mentioned[:4]
     lines = [
         f"Closes run from {equity_data['date'].min():%d %b %Y} to {equity_data['date'].max():%d %b %Y}.",
-        f"{len(codes)} symbols. Day Price is the daily close in Kenyan shillings.",
-        "Symbols: " + ", ".join(codes),
+        "Day Price is the daily close in Kenyan shillings.",
+        "Every listed company is shown as TICKER — company name. Match a question to either.",
+        "Companies:",
     ]
+    lines.extend(f"{code} — {name}" for code, name in pairs)
     for code in mentioned:
         history = equity_data[equity_data["Code"] == code].sort_values("date")
         if history.empty:
@@ -672,6 +750,7 @@ def ask_market_bot(history, context):
         "role": "system",
         "content": (
             "You analyse Nairobi Securities Exchange daily closes for the NSE Investment Explorer. "
+            "The market data lists every company as TICKER — company name. A question may use the ticker or the company name, such as Equity for EQTY. "
             "Use only the market data supplied with the question. If a figure is not in that data, say so. "
             "Prices are Kenyan shillings. Do not give personal financial advice. Keep the answer short and name the dates you use."
         ),
@@ -714,20 +793,54 @@ def render_market_chat(equity_data):
     css_class = "chat-anchor" if open_chat else "chat-anchor chat-closed"
     with st.container():
         st.markdown(f'<span class="{css_class}"></span>', unsafe_allow_html=True)
-        if st.button("Close chat" if open_chat else "Ask", key="chat_toggle", help="Ask about these prices"):
-            st.session_state["chat_open"] = not open_chat
-            st.rerun()
         if not open_chat:
+            if st.button("Ask", key="chat_toggle", help="Ask about these prices"):
+                st.session_state["chat_open"] = True
+                st.rerun()
             return
-        st.caption("Ask about the closes in this app. Answers use the price history, not a live quote.")
+        title_col, close_col = st.columns([4, 1])
+        with title_col:
+            st.markdown("**Ask**")
+        with close_col:
+            if st.button("Close", key="chat_close"):
+                st.session_state["chat_open"] = False
+                st.rerun()
+        st.caption("Use Send. Answers use the price history, not a live quote.")
         if not os.environ.get("OPENROUTER_API_KEY", "").strip():
             st.info("Add OPENROUTER_API_KEY and the chat can answer.")
+        if st.session_state.pop("chat_clear_draft", False):
+            st.session_state["chat_draft"] = ""
         for message in st.session_state.get("chat_messages", [])[-8:]:
             speaker = "You" if message["role"] == "user" else "Assistant"
             st.markdown(f"**{speaker}:** {message['content']}")
-        if st.session_state.pop("chat_clear_draft", False):
-            st.session_state["chat_draft"] = ""
-        draft = st.text_input("Question", key="chat_draft", label_visibility="collapsed", placeholder="Ask about a stock or the market")
+        pending = st.session_state.get("chat_pending")
+        if pending:
+            st.markdown(
+                '<div class="writing">Writing<span></span><span></span><span></span></div>',
+                unsafe_allow_html=True,
+            )
+            try:
+                with st.spinner("Writing a response"):
+                    answer = ask_market_bot(
+                        st.session_state.get("chat_messages", []),
+                        market_context(equity_data, pending, st.session_state.get("focus_code")),
+                    )
+            except Exception as exc:
+                st.session_state.pop("chat_pending", None)
+                st.error(str(exc))
+                return
+            history = list(st.session_state.get("chat_messages", []))
+            history.append({"role": "assistant", "content": answer})
+            st.session_state["chat_messages"] = history[-12:]
+            st.session_state.pop("chat_pending", None)
+            st.rerun()
+        draft = st.text_area(
+            "Question",
+            key="chat_draft",
+            label_visibility="collapsed",
+            placeholder="Ask about a stock or the market",
+            height=68,
+        )
         send_col, clear_col = st.columns(2)
         with send_col:
             send = st.button("Send", key="chat_send", use_container_width=True)
@@ -735,6 +848,7 @@ def render_market_chat(equity_data):
             clear = st.button("Clear", key="chat_clear", use_container_width=True)
         if clear:
             st.session_state["chat_messages"] = []
+            st.session_state.pop("chat_pending", None)
             st.session_state["chat_clear_draft"] = True
             st.rerun()
         if not send or not str(draft or "").strip():
@@ -742,16 +856,8 @@ def render_market_chat(equity_data):
         question = str(draft).strip()
         history = list(st.session_state.get("chat_messages", []))
         history.append({"role": "user", "content": question})
-        try:
-            answer = ask_market_bot(
-                history,
-                market_context(equity_data, question, st.session_state.get("focus_code")),
-            )
-        except Exception as exc:
-            st.error(str(exc))
-            return
-        history.append({"role": "assistant", "content": answer})
         st.session_state["chat_messages"] = history[-12:]
+        st.session_state["chat_pending"] = question
         st.session_state["chat_clear_draft"] = True
         st.rerun()
 
