@@ -59,8 +59,8 @@ div[data-testid="stMetricDelta"] { font-weight:650; }
   bottom: 1rem;
   z-index: 1000002;
   width: min(24rem, calc(100vw - 2rem));
-  max-height: 70vh;
-  overflow: auto;
+  max-height: 85vh;
+  overflow: hidden;
   background: #ffffff;
   border: 1px solid #d7ddd4;
   border-radius: 18px;
@@ -88,6 +88,21 @@ div[data-testid="stCustomComponentV1"] {
   overflow: hidden;
 }
 .chat-anchor { display: none; }
+.chat-log {
+  max-height: 42vh;
+  overflow-y: scroll;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  border: 1px solid #e5eaf2;
+  border-radius: 12px;
+  padding: .55rem .7rem .15rem;
+  margin: .15rem 0 .55rem;
+  background: #f7f8fb;
+}
+.chat-log p { margin: 0 0 .75rem; font-size: .92rem; line-height: 1.4; color: #17243b; }
+.chat-empty { color: #6d7b91; }
 .writing { color: #087f8c; font-weight: 650; font-size: .92rem; margin: .35rem 0 .6rem; }
 .writing span {
   display: inline-block; width: .38rem; height: .38rem; margin-left: .22rem;
@@ -642,101 +657,83 @@ def show_holding_chart(equity_data, codes, min_date, max_date, bands, slider_key
     window["indexed"] = window["price"] / window["base_price"] * 100
     st.plotly_chart(price_path_chart(window, "Share prices across the dates you chose", bands), use_container_width=True)
 
-NAME_SKIP = {
-    "bank", "group", "limited", "holdings", "company", "kenya", "plc", "ltd",
-    "the", "and", "east", "africa", "ord", "pref", "new", "co",
-}
-
 def name_tokens(text):
     cleaned = str(text or "").lower()
     cleaned = re.sub(r"\s*&\s*", "", cleaned)
-    cleaned = cleaned.replace("co-op", "coop").replace("co op", "coop")
     return re.findall(r"[a-z0-9]+", cleaned)
 
-ALSO_CALLED = {
-    "DTK": "diamond trust",
-    "EABL": "east african breweries",
-    "BAT": "british american tobacco",
-    "SCBK": "standard chartered stanchart",
-    "ABSA": "barclays",
-    "HFCK": "housing finance",
-    "KCB": "commercial",
-    "KNRE": "reinsurance",
-    "NSE": "nairobi securities exchange",
-    "TPSE": "serena",
-    "SCAN": "scangroup",
-    "IMH": "im",
+BANK_CODES = {
+    "ABSA", "BKG", "COOP", "DTK", "EQTY", "FMLY", "HFCK", "IMH", "KCB", "NCBA", "SBIC", "SCBK",
 }
 
-def stocks_named_in(question, directory):
-    asked = [token for token in name_tokens(question) if token not in NAME_SKIP]
-    asked_set = set(asked)
+def mentioned_codes(question, pairs):
+    asked = set(name_tokens(question))
     hits = []
-    for code, name in directory:
-        extra = ALSO_CALLED.get(code, "")
-        code_words = set(name_tokens(code))
-        words = [
-            token for token in name_tokens(name)
-            if len(token) >= 3 and token not in NAME_SKIP
-        ]
-        words.extend(
-            token for token in name_tokens(extra)
-            if len(token) >= 2 and token not in NAME_SKIP
-        )
-        if code_words & asked_set or any(token in asked_set for token in words):
+    for code, name in pairs:
+        words = [token for token in name_tokens(name) if len(token) >= 4]
+        if code.lower() in asked or any(token in asked for token in words):
             hits.append(code)
-            continue
-        if any(
-            len(token) >= 4 and any(
-                word.startswith(token) or token.startswith(word)
-                for word in asked
-                if len(word) >= 4
-            )
-            for token in words
-        ):
-            hits.append(code)
-    if not ({"pref", "preference", "p4", "p7"} & asked_set):
-        ordinary = [code for code in hits if "-p" not in code.lower()]
-        if ordinary:
-            hits = ordinary
-    return hits
+    return hits[:4]
+
+def series_text(history, with_volume):
+    parts = []
+    for row in history.itertuples(index=False):
+        piece = f"{row.date:%Y-%m-%d} {row.price}"
+        volume = getattr(row, "volume", None)
+        if with_volume and pd.notna(volume):
+            piece += f" vol {int(volume)}"
+        parts.append(piece)
+    return "; ".join(parts)
 
 def market_context(equity_data, question, focus_code):
-    directory = (
-        equity_data.sort_values("date")
-        .groupby("Code")["display_name"]
-        .last()
-        .sort_index()
-    )
-    pairs = [(str(code), str(name)) for code, name in directory.items()]
-    mentioned = stocks_named_in(question, pairs)
-    if focus_code and str(focus_code) not in mentioned:
-        mentioned.insert(0, str(focus_code))
-    mentioned = mentioned[:4]
-    lines = [
-        f"Closes run from {equity_data['date'].min():%d %b %Y} to {equity_data['date'].max():%d %b %Y}.",
-        "Day Price is the daily close in Kenyan shillings.",
-        "Every listed company is shown as TICKER — company name. Match a question to either.",
-        "Companies:",
+    ordered = equity_data.sort_values(["Code", "date"])
+    pairs = [
+        (str(code), str(name))
+        for code, name in ordered.groupby("Code")["display_name"].last().sort_index().items()
     ]
-    lines.extend(f"{code} — {name}" for code, name in pairs)
-    for code in mentioned:
-        history = equity_data[equity_data["Code"] == code].sort_values("date")
-        if history.empty:
-            continue
+    named = mentioned_codes(question, pairs)
+    if focus_code and str(focus_code) not in named:
+        named.append(str(focus_code))
+    lines = [
+        f"Closes run from {ordered['date'].min():%d %b %Y} to {ordered['date'].max():%d %b %Y}.",
+        "Day Price is the daily close in Kenyan shillings. This list is every company in the app.",
+        "For every company: latest close, record low, record high, the month-end close for the whole record, and the last 20 daily closes.",
+        "Companies named in the question also include their full daily closes. Do not invent a daily close for a date that is not listed.",
+    ]
+    banks = []
+    company_lines = []
+    for code, history in ordered.groupby("Code", sort=True):
+        code = str(code)
         latest = history.iloc[-1]
+        name = str(latest["display_name"])
         low = history.loc[history["price"].idxmin()]
         high = history.loc[history["price"].idxmax()]
-        lines.append(
-            f"{code} {latest['display_name']}: latest {latest['price']} on {latest['date']:%Y-%m-%d}; "
-            f"lowest {low['price']} on {low['date']:%Y-%m-%d}; "
-            f"highest {high['price']} on {high['date']:%Y-%m-%d}."
+        months = history.assign(month=history["date"].dt.to_period("M")).groupby("month", sort=True).tail(1)
+        volume = latest["volume"]
+        extras = []
+        if pd.notna(volume):
+            extras.append(f"latest volume {int(volume)}")
+        if pd.notna(latest["day_low"]):
+            extras.append(f"session low {latest['day_low']}")
+        if pd.notna(latest["day_high"]):
+            extras.append(f"session high {latest['day_high']}")
+        extra_text = f"; {'; '.join(extras)}" if extras else ""
+        company_lines.append(
+            f"{code} {name}: latest {latest['price']} on {latest['date']:%Y-%m-%d}{extra_text}; "
+            f"record low {low['price']} on {low['date']:%Y-%m-%d}; "
+            f"record high {high['price']} on {high['date']:%Y-%m-%d}"
         )
-        recent = [
-            f"{row.date:%Y-%m-%d} {row.price}"
-            for row in history.tail(12).itertuples(index=False)
-        ]
-        lines.append(f"{code} latest closes: " + "; ".join(recent))
+        company_lines.append("month ends: " + series_text(months, with_volume=False))
+        company_lines.append("last 20 sessions: " + series_text(history.tail(20), with_volume=True))
+        if code in named:
+            company_lines.append("full daily closes: " + series_text(history, with_volume=False))
+        if code in BANK_CODES or "bank" in name_tokens(name):
+            banks.append(f"{code} {name}")
+    if focus_code:
+        lines.append(f"The page is currently showing {focus_code}.")
+    lines.append("Banks: " + "; ".join(banks))
+    lines.append("All companies:")
+    lines.extend(company_lines)
     return "\n".join(lines)
 
 def ask_market_bot(history, context):
@@ -750,9 +747,11 @@ def ask_market_bot(history, context):
         "role": "system",
         "content": (
             "You analyse Nairobi Securities Exchange daily closes for the NSE Investment Explorer. "
-            "The market data lists every company as TICKER — company name. A question may use the ticker or the company name, such as Equity for EQTY. "
-            "Use only the market data supplied with the question. If a figure is not in that data, say so. "
-            "Prices are Kenyan shillings. Do not give personal financial advice. Keep the answer short and name the dates you use."
+            "The market data lists every company. Each one has a latest close, record low, record high, month-end closes for the whole record, and the last 20 daily closes. "
+            "A company named in the question also has its full daily closes. "
+            "Answer a group question, such as all banks, for every company in that group from those figures. "
+            "Do not say a listed company has no closing price. Do not invent a ticker or a daily close that is not in the data. "
+            "Prices are Kenyan shillings. Do not give personal financial advice. Name the dates you use."
         ),
     }]
     messages.extend(history[-8:])
@@ -788,6 +787,19 @@ def ask_market_bot(history, context):
         raise RuntimeError("OpenRouter returned an empty answer.")
     return text
 
+def chat_transcript(messages):
+    import html
+
+    parts = ['<div class="chat-log">']
+    if not messages:
+        parts.append('<p class="chat-empty">Ask about a stock, the banks, or the whole market.</p>')
+    for message in messages[-12:]:
+        speaker = "You" if message["role"] == "user" else "Assistant"
+        body = html.escape(str(message["content"])).replace("\n", "<br>")
+        parts.append(f"<p><strong>{speaker}:</strong> {body}</p>")
+    parts.append("</div>")
+    return "".join(parts)
+
 def render_market_chat(equity_data):
     open_chat = bool(st.session_state.get("chat_open"))
     css_class = "chat-anchor" if open_chat else "chat-anchor chat-closed"
@@ -810,10 +822,8 @@ def render_market_chat(equity_data):
             st.info("Add OPENROUTER_API_KEY and the chat can answer.")
         if st.session_state.pop("chat_clear_draft", False):
             st.session_state["chat_draft"] = ""
-        for message in st.session_state.get("chat_messages", [])[-8:]:
-            speaker = "You" if message["role"] == "user" else "Assistant"
-            st.markdown(f"**{speaker}:** {message['content']}")
         pending = st.session_state.get("chat_pending")
+        st.markdown(chat_transcript(st.session_state.get("chat_messages", [])), unsafe_allow_html=True)
         if pending:
             st.markdown(
                 '<div class="writing">Writing<span></span><span></span><span></span></div>',
