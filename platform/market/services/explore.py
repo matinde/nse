@@ -165,16 +165,22 @@ def _layout(fig, height, title):
     fig.update_layout(
         template="none",
         height=height,
-        margin=dict(l=12, r=12, t=48, b=12),
+        margin=dict(l=88, r=36, t=48, b=72),
         legend_title_text="",
         hovermode="x unified",
+        hoverlabel=dict(
+            bgcolor="#ffffff",
+            bordercolor="#0f172a",
+            font=dict(family="Inter, Arial, sans-serif", size=13, color="#0f172a"),
+        ),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         font=dict(family="Inter, Arial, sans-serif", size=13),
         title=dict(text=title or "", font=dict(size=16)),
     )
-    fig.update_xaxes(showgrid=False)
-    fig.update_yaxes(zeroline=False)
+    fig.update_xaxes(showgrid=False, automargin=True, title_standoff=18)
+    fig.update_yaxes(zeroline=False, automargin=True, title_standoff=16)
+    fig.update_layout(margin=dict(l=88, r=36, t=48, b=72))
     return fig
 
 
@@ -189,8 +195,7 @@ def line_figure(frame):
         y="price",
         labels={"date": "Trading date", "price": "Share price (KSh)"},
     )
-    fig.update_yaxes(tickprefix="KSh ")
-    return _layout(fig, 390, "")
+    return _layout(fig, 460, "")
 
 
 def candle_figure(frame, symbol):
@@ -206,8 +211,8 @@ def candle_figure(frame, symbol):
         decreasing_line_color="#b42318",
     )])
     fig.update_layout(xaxis_rangeslider_visible=False)
-    fig.update_yaxes(title="Price (KSh)", tickprefix="KSh ")
-    return _layout(fig, 390, "")
+    fig.update_yaxes(title="Price (KSh)")
+    return _layout(fig, 460, "")
 
 
 def indexed_window(frame, codes, start, end):
@@ -247,7 +252,7 @@ def path_figure(window, title, bands):
         title=title,
         labels={"date": "Trading date", "indexed": "Price path (starts at 100)", "display_name": "Company"},
     )
-    _layout(fig, 420, title)
+    _layout(fig, 460, title)
     color_by_name = {}
     for trace in fig.data:
         color_by_name[trace.name] = getattr(getattr(trace, "line", None), "color", None)

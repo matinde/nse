@@ -62,7 +62,7 @@
       <h2 class="px-2 pt-2 text-lg font-semibold">Price path</h2>
       <p class="px-2 text-xs text-slate-500">Each line starts at 100 on the first date in the range. Each shaded band is the time that stock was held. A stock you still hold is shaded through the latest close.</p>
       {% if portfolio.path %}
-        <div id="real-path" class="h-[420px]" data-chart="real-path-data"></div>
+        <div id="real-path" class="chart-frame" data-chart="real-path-data"></div>
         {{ portfolio.path|json_script:"real-path-data" }}
       {% else %}
         <p class="p-4 text-sm text-slate-500">No prices in that date range for these stocks.</p>

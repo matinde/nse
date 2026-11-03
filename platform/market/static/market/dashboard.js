@@ -4,6 +4,12 @@
     return {
       paper_bgcolor: "rgba(0,0,0,0)",
       plot_bgcolor: "rgba(0,0,0,0)",
+      "margin.l": 88,
+      "margin.r": 36,
+      "margin.t": 48,
+      "margin.b": 72,
+      "xaxis.automargin": true,
+      "yaxis.automargin": true,
       "font.color": dark ? "#e2e8f0" : "#334155",
       "title.font.color": dark ? "#f8fafc" : "#0f172a",
       "xaxis.gridcolor": dark ? "#1e293b" : "#e2e8f0",
@@ -11,7 +17,100 @@
       "xaxis.linecolor": dark ? "#334155" : "#cbd5e1",
       "yaxis.linecolor": dark ? "#334155" : "#cbd5e1",
       "legend.font.color": dark ? "#e2e8f0" : "#334155",
+      "hoverlabel.bgcolor": dark ? "#0f172a" : "#ffffff",
+      "hoverlabel.bordercolor": dark ? "#cbd5e1" : "#0f172a",
+      "hoverlabel.font.color": dark ? "#f8fafc" : "#0f172a",
+      "hoverlabel.font.size": 13,
     };
+  }
+
+  function styleHover(node) {
+    var dark = document.documentElement.classList.contains("dark");
+    var bg = dark ? "#0f172a" : "#ffffff";
+    var fg = dark ? "#f8fafc" : "#0f172a";
+    var border = dark ? "#cbd5e1" : "#0f172a";
+    Plotly.restyle(node, {
+      hoverinfo: "none",
+      "hoverlabel.bgcolor": bg,
+      "hoverlabel.bordercolor": border,
+      "hoverlabel.font.color": fg,
+      "hoverlabel.font.size": 13,
+    });
+  }
+
+  var tip = document.createElement("div");
+  tip.setAttribute("id", "chart-tip");
+  tip.style.display = "none";
+  tip.style.position = "fixed";
+  tip.style.zIndex = "60";
+  tip.style.maxHeight = "calc(100vh - 16px)";
+  tip.style.overflowY = "auto";
+  tip.style.pointerEvents = "none";
+  tip.style.borderRadius = "16px";
+  tip.style.borderWidth = "1px";
+  tip.style.borderStyle = "solid";
+  tip.style.padding = "10px 12px";
+  tip.style.fontSize = "13px";
+  tip.style.lineHeight = "1.35";
+  tip.style.boxShadow = "0 12px 32px rgba(15,23,42,.28)";
+  document.body.appendChild(tip);
+
+  function hideTip() {
+    tip.style.display = "none";
+    tip.replaceChildren();
+  }
+
+  function showTip(data) {
+    var points = (data && data.points) || [];
+    if (!points.length) return;
+    var dark = document.documentElement.classList.contains("dark");
+    tip.style.display = "block";
+    tip.style.background = dark ? "#0f172a" : "#ffffff";
+    tip.style.color = dark ? "#f8fafc" : "#0f172a";
+    tip.style.borderColor = dark ? "#cbd5e1" : "#0f172a";
+    tip.replaceChildren();
+    var when = document.createElement("div");
+    when.style.fontWeight = "650";
+    when.style.marginBottom = "6px";
+    var rawDate = points[0].x;
+    var parsed = new Date(rawDate);
+    when.textContent = isNaN(parsed.getTime())
+      ? String(rawDate)
+      : parsed.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+    tip.appendChild(when);
+    points.forEach(function (point) {
+      var row = document.createElement("div");
+      row.style.display = "flex";
+      row.style.justifyContent = "space-between";
+      row.style.gap = "16px";
+      var name = document.createElement("span");
+      name.textContent = point.data.name || "Price";
+      var value = document.createElement("span");
+      var number = Number(point.y);
+      value.textContent = isFinite(number)
+        ? number.toLocaleString("en-KE", { maximumFractionDigits: 2 })
+        : String(point.y);
+      row.appendChild(name);
+      row.appendChild(value);
+      tip.appendChild(row);
+    });
+    var mouse = data.event || {};
+    var left = (mouse.clientX || 0) + 16;
+    var top = (mouse.clientY || 0) + 16;
+    tip.style.left = left + "px";
+    tip.style.top = top + "px";
+    var box = tip.getBoundingClientRect();
+    if (left + box.width > window.innerWidth - 8) left = Math.max(8, (mouse.clientX || 0) - box.width - 16);
+    if (top + box.height > window.innerHeight - 8) top = Math.max(8, window.innerHeight - box.height - 8);
+    tip.style.left = left + "px";
+    tip.style.top = top + "px";
+  }
+
+  function bindTip(node) {
+    if (node.dataset.tip === "1" || !node.on) return;
+    node.dataset.tip = "1";
+    node.on("plotly_hover", showTip);
+    node.addEventListener("mouseleave", hideTip);
   }
 
   function drawCharts() {
@@ -24,7 +123,11 @@
       node.dataset.ready = "1";
     });
     document.querySelectorAll("[data-chart]").forEach(function (node) {
-      if (node.dataset.ready === "1") Plotly.relayout(node, themeColors());
+      if (node.dataset.ready === "1") {
+        Plotly.relayout(node, themeColors());
+        styleHover(node);
+        bindTip(node);
+      }
     });
   }
 

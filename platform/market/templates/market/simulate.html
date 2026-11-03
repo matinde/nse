@@ -20,7 +20,7 @@
       <div class="mt-2 grid max-h-48 grid-cols-2 gap-2 overflow-y-auto sm:grid-cols-3 lg:grid-cols-4">
         {% for company in companies %}
           <label class="flex items-center gap-2 rounded-xl px-2 py-1 text-sm hover:bg-slate-50 dark:hover:bg-slate-800">
-            <input type="checkbox" name="codes" value="{{ company.code }}" {% if company.code in sim.form.codes %}checked{% endif %}>
+            <input type="checkbox" name="codes" value="{{ company.code }}" onchange="this.form.submit()" {% if company.code in sim.form.codes %}checked{% endif %}>
             <span>{{ company.code }}</span>
           </label>
         {% endfor %}
@@ -98,7 +98,7 @@
   {% endif %}
   {% if sim.rank %}
     <div class="mt-4 rounded-3xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
-      <div id="rank-chart" class="min-h-[220px]" data-chart="rank-chart-data"></div>
+      <div id="rank-chart" class="chart-frame" data-chart="rank-chart-data"></div>
       {{ sim.rank|json_script:"rank-chart-data" }}
     </div>
   {% endif %}
@@ -106,7 +106,7 @@
     <h2 class="px-2 pt-2 text-lg font-semibold">Price path</h2>
     <p class="px-2 text-xs text-slate-500">Each line starts at 100 on the first date in the range. The shaded band is the purchase date through the sell date.</p>
     {% if sim.path %}
-      <div id="sim-path" class="h-[420px]" data-chart="sim-path-data"></div>
+      <div id="sim-path" class="chart-frame" data-chart="sim-path-data"></div>
       {{ sim.path|json_script:"sim-path-data" }}
     {% else %}
       <p class="p-4 text-sm text-slate-500">No prices in that date range for these stocks.</p>
