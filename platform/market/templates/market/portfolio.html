@@ -1,0 +1,94 @@
+<section class="rise">
+  <h1 class="text-3xl font-semibold tracking-tight">My portfolio</h1>
+  <p class="mt-2 max-w-2xl text-sm text-slate-500 dark:text-slate-400">These trades are saved to your account. Holdings are valued at the latest official close. A price you type can differ from that close.</p>
+  <form method="post" action="/?section=portfolio" class="mt-6 grid gap-3 rounded-3xl border border-slate-200 bg-white p-4 md:grid-cols-6 dark:border-slate-800 dark:bg-slate-900">
+    {% csrf_token %}
+    <label class="text-sm font-medium md:col-span-2">Stock
+      <select name="trade_code" class="mt-1 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950">
+        {% for company in companies %}
+          <option value="{{ company.code }}" {% if company.code == "DTK" %}selected{% endif %}>{{ company.code }} · {{ company.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="text-sm font-medium">Side
+      <select name="side" class="mt-1 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950">
+        <option value="buy">Buy</option>
+        <option value="sell">Sell</option>
+      </select>
+    </label>
+    <label class="text-sm font-medium">Shares
+      <input name="shares" value="1" inputmode="numeric" class="mt-1 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950">
+    </label>
+    <label class="text-sm font-medium">Price
+      <input name="price" value="1.00" inputmode="decimal" class="mt-1 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950">
+    </label>
+    <label class="text-sm font-medium">Date
+      <input type="date" name="trade_date" value="{{ portfolio.entry_default }}" min="{{ portfolio.earliest }}" max="{{ portfolio.entry_max }}" class="mt-1 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950">
+    </label>
+    <div class="md:col-span-6"><button name="action" value="save" class="rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white dark:bg-teal-500 dark:text-slate-950">Save trade</button></div>
+  </form>
+
+  {% if not portfolio.ledger %}
+    <p class="mt-6 rounded-3xl border border-slate-200 bg-white p-6 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900">No trades yet. Add a buy to start this portfolio.</p>
+  {% else %}
+    {% if portfolio.error %}<p class="mt-4 text-sm text-rose-700">{{ portfolio.error }}</p>{% endif %}
+    {% if portfolio.missing_close %}<p class="mt-4 text-xs text-slate-500">A holding with no official close yet is shown at the price you paid.</p>{% endif %}
+    {% if portfolio.open_rows %}
+      <div class="mt-4 overflow-x-auto rounded-3xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+        <table class="min-w-full text-left text-sm">
+          <thead class="text-xs uppercase tracking-wide text-slate-400"><tr>
+            <th class="px-3 py-3">Code</th><th class="px-3 py-3">Company</th><th class="px-3 py-3">Shares</th><th class="px-3 py-3">Average cost</th><th class="px-3 py-3">Latest close</th><th class="px-3 py-3">Close date</th><th class="px-3 py-3">Value</th><th class="px-3 py-3">Profit / loss</th><th class="px-3 py-3">Return</th>
+          </tr></thead>
+          <tbody>
+            {% for row in portfolio.open_rows %}
+            <tr class="border-t border-slate-100 dark:border-slate-800">
+              <td class="px-3 py-2 font-medium">{{ row.code }}</td><td class="px-3 py-2">{{ row.company }}</td><td class="px-3 py-2">{{ row.shares }}</td><td class="px-3 py-2">{{ row.average }}</td><td class="px-3 py-2">{{ row.close }}</td><td class="px-3 py-2">{{ row.close_date }}</td><td class="px-3 py-2">{{ row.value }}</td>
+              <td class="px-3 py-2 {% if row.gain_up %}text-teal-700 dark:text-teal-300{% else %}text-rose-700 dark:text-rose-300{% endif %}">{{ row.gain }}</td>
+              <td class="px-3 py-2">{{ row.gain_pct }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% endif %}
+    <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <article class="rounded-3xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"><p class="text-xs text-slate-500">Shares still held</p><p class="mt-2 text-lg font-semibold">{{ portfolio.shares }}</p></article>
+      <article class="rounded-3xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"><p class="text-xs text-slate-500">Cost of open shares</p><p class="mt-2 text-lg font-semibold">{{ portfolio.cost }}</p></article>
+      <article class="rounded-3xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"><p class="text-xs text-slate-500">Value at latest close</p><p class="mt-2 text-lg font-semibold">{{ portfolio.value }}</p></article>
+      <article class="rounded-3xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"><p class="text-xs text-slate-500">Profit / loss</p><p class="mt-2 text-lg font-semibold {% if portfolio.profit_up %}text-teal-700 dark:text-teal-300{% else %}text-rose-700 dark:text-rose-300{% endif %}">{{ portfolio.profit }}</p><p class="text-xs">{{ portfolio.profit_pct }}</p></article>
+    </div>
+    {% if portfolio.realized %}<p class="mt-3 text-xs text-slate-500">Profit already taken on sells: {{ portfolio.realized }}. That amount is included in the profit above.</p>{% endif %}
+    <div class="mt-4 rounded-3xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
+      <h2 class="px-2 pt-2 text-lg font-semibold">Price path</h2>
+      <p class="px-2 text-xs text-slate-500">Each line starts at 100 on the first date in the range. Each shaded band is the time that stock was held. A stock you still hold is shaded through the latest close.</p>
+      {% if portfolio.path %}
+        <div id="real-path" class="h-[420px]" data-chart="real-path-data"></div>
+        {{ portfolio.path|json_script:"real-path-data" }}
+      {% else %}
+        <p class="p-4 text-sm text-slate-500">No prices in that date range for these stocks.</p>
+      {% endif %}
+    </div>
+    <h2 class="mt-8 text-xl font-semibold">Trades</h2>
+    <div class="mt-3 overflow-x-auto rounded-3xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+      <table class="min-w-full text-left text-sm">
+        <thead class="text-xs uppercase tracking-wide text-slate-400"><tr>
+          <th class="px-3 py-3">Date</th><th class="px-3 py-3">Side</th><th class="px-3 py-3">Code</th><th class="px-3 py-3">Shares</th><th class="px-3 py-3">Your price</th><th class="px-3 py-3">Official close</th><th class="px-3 py-3">Difference</th><th class="px-3 py-3"></th>
+        </tr></thead>
+        <tbody>
+          {% for row in portfolio.ledger %}
+          <tr class="border-t border-slate-100 dark:border-slate-800">
+            <td class="px-3 py-2">{{ row.date }}</td><td class="px-3 py-2">{{ row.side }}</td><td class="px-3 py-2 font-medium">{{ row.code }}</td><td class="px-3 py-2">{{ row.shares }}</td><td class="px-3 py-2">{{ row.price }}</td><td class="px-3 py-2">{{ row.official }}</td><td class="px-3 py-2">{{ row.gap }}</td>
+            <td class="px-3 py-2">
+              <form method="post" action="/?section=portfolio">{% csrf_token %}
+                <input type="hidden" name="action" value="remove">
+                <input type="hidden" name="trade_id" value="{{ row.id }}">
+                <button class="text-sm text-rose-700 dark:text-rose-300">Remove</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+</section>

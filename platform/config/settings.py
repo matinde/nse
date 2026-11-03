@@ -87,6 +87,8 @@ STORAGES = {
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 SESSION_ENGINE = "django.contrib.sessions.backends.db"
+LOGIN_URL = "login"
+LOGIN_REDIRECT_URL = "dashboard"
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 USE_X_FORWARDED_HOST = True

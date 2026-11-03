@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}NSE Investment Explorer{% endblock %}</title>
+  <script>
+    (function () {
+      var saved = localStorage.getItem("nse-theme");
+      var dark = saved === "dark" || (!saved && window.matchMedia("(prefers-color-scheme: dark)").matches);
+      if (dark) document.documentElement.classList.add("dark");
+    })();
+  </script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>tailwind.config = { darkMode: "class" };</script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@420;520;640;720&display=swap" rel="stylesheet">
+  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+  <style>
+    body { font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+    .rise { animation: rise .35s ease; }
+    @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+    #chat-panel { display: none; }
+    #chat-panel.is-open { display: flex; }
+    @keyframes panel { from { opacity: 0; transform: translateY(10px) scale(.98); } to { opacity: 1; transform: none; } }
+    .typing span { animation: blink 1s infinite ease-in-out; }
+    .typing span:nth-child(2) { animation-delay: .15s; }
+    .typing span:nth-child(3) { animation-delay: .3s; }
+    @keyframes blink { 0%, 80%, 100% { opacity: .25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-2px); } }
+  </style>
+  {% load static %}
+</head>
+<body class="bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100">
+  {% block body %}{% endblock %}
+  <script src="{% static 'market/dashboard.js' %}"></script>
+</body>
+</html>

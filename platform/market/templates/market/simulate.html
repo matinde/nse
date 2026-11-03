@@ -1,0 +1,115 @@
+<section class="rise">
+  <h1 class="text-3xl font-semibold tracking-tight">A portfolio</h1>
+  <p class="mt-2 max-w-2xl text-sm text-slate-500 dark:text-slate-400">The amount is split evenly across the stocks you pick. Change the amount and the split updates. To give one stock more, move cash out of another. The total stays the same.</p>
+  <form method="post" action="/?section=simulate" class="mt-6 rounded-3xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900">
+    {% csrf_token %}
+    <input type="hidden" name="section" value="simulate">
+    <div class="grid gap-3 md:grid-cols-3">
+      <label class="text-sm font-medium">Amount to invest (KSh)
+        <input name="pot" value="{{ sim.form.pot }}" inputmode="decimal" class="mt-1 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950">
+      </label>
+      <label class="text-sm font-medium">Purchase date
+        <input type="date" name="buy" value="{{ sim.form.buy }}" min="{{ sim.earliest }}" max="{{ sim.latest_day }}" class="mt-1 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950">
+      </label>
+      <label class="text-sm font-medium">Sell date
+        <input type="date" name="sell" value="{{ sim.form.sell }}" min="{{ sim.earliest }}" max="{{ sim.latest_day }}" class="mt-1 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950">
+      </label>
+    </div>
+    <fieldset class="mt-4">
+      <legend class="text-sm font-medium">Stocks in the mix <span class="font-normal text-slate-400">up to 8</span></legend>
+      <div class="mt-2 grid max-h-48 grid-cols-2 gap-2 overflow-y-auto sm:grid-cols-3 lg:grid-cols-4">
+        {% for company in companies %}
+          <label class="flex items-center gap-2 rounded-xl px-2 py-1 text-sm hover:bg-slate-50 dark:hover:bg-slate-800">
+            <input type="checkbox" name="codes" value="{{ company.code }}" {% if company.code in sim.form.codes %}checked{% endif %}>
+            <span>{{ company.code }}</span>
+          </label>
+        {% endfor %}
+      </div>
+    </fieldset>
+    {% if sim.form.alloc %}
+      <div class="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {% for item in sim.form.alloc %}
+          <label class="text-sm font-medium">{{ item.code }} (KSh)
+            <input name="alloc_{{ item.code }}" value="{{ item.amount }}" inputmode="decimal" class="mt-1 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950">
+          </label>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="mt-4 text-sm text-slate-500">Choose at least one stock.</p>
+    {% endif %}
+    {% if sim.form.codes|length > 1 %}
+      <div class="mt-4 grid gap-3 md:grid-cols-4">
+        <label class="text-sm font-medium">Take from
+          <select name="move_from" class="mt-1 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950">
+            {% for item in sim.form.alloc %}<option>{{ item.code }}</option>{% endfor %}
+          </select>
+        </label>
+        <label class="text-sm font-medium">Add to
+          <select name="move_to" class="mt-1 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950">
+            {% for item in sim.form.alloc %}<option>{{ item.code }}</option>{% endfor %}
+          </select>
+        </label>
+        <label class="text-sm font-medium">Amount to move
+          <input name="move_amount" value="0" inputmode="decimal" class="mt-1 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950">
+        </label>
+        <div class="flex items-end"><button name="action" value="move" class="w-full rounded-2xl border border-slate-300 py-2 text-sm font-semibold dark:border-slate-600">Move</button></div>
+      </div>
+    {% endif %}
+    <div class="mt-4 grid gap-3 md:grid-cols-2">
+      <label class="text-sm font-medium">Graph from
+        <input type="date" name="chart_start" value="{{ sim.form.chart_start }}" min="{{ sim.earliest }}" max="{{ sim.latest_day }}" class="mt-1 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950">
+      </label>
+      <label class="text-sm font-medium">Graph to
+        <input type="date" name="chart_end" value="{{ sim.form.chart_end }}" min="{{ sim.earliest }}" max="{{ sim.latest_day }}" class="mt-1 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-950">
+      </label>
+    </div>
+    <button name="action" value="apply" class="mt-4 rounded-2xl bg-slate-900 px-4 py-2 text-sm font-semibold text-white dark:bg-teal-500 dark:text-slate-950">Update mix</button>
+  </form>
+
+  {% if sim.over %}<p class="mt-4 text-sm text-amber-800 dark:text-amber-200">{{ sim.over_text }}</p>{% endif %}
+  {% if sim.unallocated_text %}<p class="mt-2 text-sm text-slate-500">{{ sim.unallocated_text }}</p>{% endif %}
+  {% if sim.notes %}<p class="mt-2 text-sm text-amber-800 dark:text-amber-200">{{ sim.notes|join:" " }}</p>{% endif %}
+
+  {% if sim.rows %}
+    <div class="mt-4 overflow-x-auto rounded-3xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
+      <table class="min-w-full text-left text-sm">
+        <thead class="text-xs uppercase tracking-wide text-slate-400"><tr>
+          <th class="px-3 py-3">Rank</th><th class="px-3 py-3">Code</th><th class="px-3 py-3">Company</th><th class="px-3 py-3">Amount</th><th class="px-3 py-3">Shares</th><th class="px-3 py-3">Bought</th><th class="px-3 py-3">Buy</th><th class="px-3 py-3">Sold</th><th class="px-3 py-3">Sell</th><th class="px-3 py-3">Value</th><th class="px-3 py-3">Cash left</th><th class="px-3 py-3">Profit / loss</th><th class="px-3 py-3">Return</th>
+        </tr></thead>
+        <tbody>
+          {% for row in sim.rows %}
+          <tr class="border-t border-slate-100 dark:border-slate-800">
+            <td class="px-3 py-2">{{ row.rank }}</td><td class="px-3 py-2 font-medium">{{ row.code }}</td><td class="px-3 py-2">{{ row.company }}</td><td class="px-3 py-2">{{ row.amount }}</td><td class="px-3 py-2">{{ row.shares }}</td><td class="px-3 py-2">{{ row.bought }}</td><td class="px-3 py-2">{{ row.buy_price }}</td><td class="px-3 py-2">{{ row.sold }}</td><td class="px-3 py-2">{{ row.sell_price }}</td><td class="px-3 py-2">{{ row.value }}</td><td class="px-3 py-2">{{ row.cash_left }}</td>
+            <td class="px-3 py-2 {% if row.gain_up %}text-teal-700 dark:text-teal-300{% else %}text-rose-700 dark:text-rose-300{% endif %}">{{ row.gain }}</td>
+            <td class="px-3 py-2">{{ row.gain_pct }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if sim.totals %}
+      <div class="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <article class="rounded-3xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"><p class="text-xs text-slate-500">Spent on shares</p><p class="mt-2 text-lg font-semibold">{{ sim.totals.spent }}</p></article>
+        <article class="rounded-3xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"><p class="text-xs text-slate-500">Cash still held</p><p class="mt-2 text-lg font-semibold">{{ sim.totals.cash }}</p></article>
+        <article class="rounded-3xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"><p class="text-xs text-slate-500">Wealth at sale</p><p class="mt-2 text-lg font-semibold">{{ sim.totals.wealth }}</p></article>
+        <article class="rounded-3xl border border-slate-200 bg-white p-4 dark:border-slate-800 dark:bg-slate-900"><p class="text-xs text-slate-500">Portfolio profit / loss</p><p class="mt-2 text-lg font-semibold {% if sim.totals.gain_up %}text-teal-700 dark:text-teal-300{% else %}text-rose-700 dark:text-rose-300{% endif %}">{{ sim.totals.gain }}</p><p class="text-xs">{{ sim.totals.gain_pct }}</p></article>
+      </div>
+    {% endif %}
+  {% endif %}
+  {% if sim.rank %}
+    <div class="mt-4 rounded-3xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
+      <div id="rank-chart" class="min-h-[220px]" data-chart="rank-chart-data"></div>
+      {{ sim.rank|json_script:"rank-chart-data" }}
+    </div>
+  {% endif %}
+  <div class="mt-4 rounded-3xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
+    <h2 class="px-2 pt-2 text-lg font-semibold">Price path</h2>
+    <p class="px-2 text-xs text-slate-500">Each line starts at 100 on the first date in the range. The shaded band is the purchase date through the sell date.</p>
+    {% if sim.path %}
+      <div id="sim-path" class="h-[420px]" data-chart="sim-path-data"></div>
+      {{ sim.path|json_script:"sim-path-data" }}
+    {% else %}
+      <p class="p-4 text-sm text-slate-500">No prices in that date range for these stocks.</p>
+    {% endif %}
+  </div>
+</section>

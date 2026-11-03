@@ -1,0 +1,66 @@
+{% extends "market/base.html" %}
+{% block body %}
+<div class="min-h-screen md:grid md:grid-cols-[232px_1fr]">
+  <aside class="flex items-center justify-between gap-4 border-b border-slate-200 bg-white px-4 py-4 md:flex-col md:items-stretch md:justify-start md:border-b-0 md:border-r md:px-5 md:py-6 dark:border-slate-800 dark:bg-slate-900">
+    <div>
+      <p class="text-[11px] font-semibold uppercase tracking-[0.18em] text-teal-700 dark:text-teal-300">NSE</p>
+      <p class="mt-1 text-lg font-semibold tracking-tight">Explorer</p>
+    </div>
+    <nav class="flex gap-2 md:mt-8 md:flex-col">
+      <a href="/?section=stock{% if focus_code %}&code={{ focus_code }}{% endif %}" class="rounded-2xl px-3 py-2 text-sm font-medium {% if section == 'stock' %}bg-slate-900 text-white dark:bg-teal-500 dark:text-slate-950{% else %}text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800{% endif %}">Stock</a>
+      <a href="/?section=simulate" class="rounded-2xl px-3 py-2 text-sm font-medium {% if section == 'simulate' %}bg-slate-900 text-white dark:bg-teal-500 dark:text-slate-950{% else %}text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800{% endif %}">Simulate</a>
+      <a href="/?section=portfolio" class="rounded-2xl px-3 py-2 text-sm font-medium {% if section == 'portfolio' %}bg-slate-900 text-white dark:bg-teal-500 dark:text-slate-950{% else %}text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800{% endif %}">Portfolio</a>
+    </nav>
+    <div class="md:mt-auto">
+      <button id="theme-toggle" type="button" class="rounded-2xl border border-slate-200 px-3 py-2 text-sm font-medium dark:border-slate-700">Theme</button>
+      <p class="mt-4 hidden text-xs text-slate-500 md:block dark:text-slate-400">Signed in as {{ request.user.username }}</p>
+      <form method="post" action="{% url 'logout' %}" class="mt-2 hidden md:block">{% csrf_token %}<button class="text-sm font-medium text-slate-600 underline-offset-4 hover:underline dark:text-slate-300">Log out</button></form>
+    </div>
+  </aside>
+  <main class="px-4 py-6 md:px-8 md:py-8">
+    {% if messages %}
+      <div class="mb-4 space-y-2">
+        {% for message in messages %}
+          <p class="rounded-2xl bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-100">{{ message }}</p>
+        {% endfor %}
+      </div>
+    {% endif %}
+    {% if load_error %}
+      <p class="rounded-3xl border border-rose-200 bg-white p-6 text-rose-700 dark:border-rose-900 dark:bg-slate-900 dark:text-rose-200">{{ load_error }}</p>
+    {% elif section == "stock" %}
+      {% include "market/stock.html" %}
+    {% elif section == "simulate" %}
+      {% include "market/simulate.html" %}
+    {% else %}
+      {% include "market/portfolio.html" %}
+    {% endif %}
+    <p class="mt-10 text-xs text-slate-400">{% if record_to %}Prices through {{ record_to }}. {% endif %}Historical performance is not a forecast.</p>
+  </main>
+</div>
+
+<button id="chat-open" type="button" class="fixed bottom-4 left-4 z-40 rounded-full bg-slate-900 px-4 py-3 text-sm font-semibold text-white shadow-lg transition hover:-translate-y-0.5 dark:bg-teal-500 dark:text-slate-950">Ask</button>
+<section id="chat-panel" class="panel-in fixed bottom-4 left-4 z-40 w-[min(24rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-2xl dark:border-slate-700 dark:bg-slate-900" data-focus="{{ focus_code }}">
+  <header class="flex items-center justify-between border-b border-slate-100 px-4 py-3 dark:border-slate-800">
+    <div>
+      <p class="text-sm font-semibold">Ask</p>
+      <p class="text-xs text-slate-500 dark:text-slate-400">Closes from this app, not a live quote.</p>
+    </div>
+    <button id="chat-close" type="button" class="rounded-xl border border-slate-200 px-3 py-1.5 text-sm dark:border-slate-700">Close</button>
+  </header>
+  <div id="chat-log" class="max-h-[46vh] space-y-3 overflow-y-auto px-4 py-4">
+    {% for message in chat_messages %}
+      <article class="rise max-w-[90%] rounded-2xl px-3 py-2 text-sm leading-relaxed {% if message.role == 'user' %}ml-auto bg-slate-900 text-white dark:bg-teal-500 dark:text-slate-950{% else %}bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-100{% endif %}">{{ message.content }}</article>
+    {% empty %}
+      <p id="chat-empty" class="text-sm text-slate-500 dark:text-slate-400">Ask about a stock, the banks, or the whole market.</p>
+    {% endfor %}
+  </div>
+  <form id="chat-form" class="border-t border-slate-100 p-3 dark:border-slate-800">
+    {% csrf_token %}
+    <textarea id="chat-input" rows="2" placeholder="Ask about a stock or the market" class="w-full resize-none rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none ring-teal-600 focus:ring-2 dark:border-slate-700 dark:bg-slate-950"></textarea>
+    <div class="mt-2 flex gap-2">
+      <button id="chat-send" class="flex-1 rounded-2xl bg-slate-900 py-2 text-sm font-semibold text-white dark:bg-teal-500 dark:text-slate-950">Send</button>
+      <button id="chat-clear" type="button" class="rounded-2xl border border-slate-200 px-4 py-2 text-sm dark:border-slate-700">Clear</button>
+    </div>
+  </form>
+</section>
+{% endblock %}
