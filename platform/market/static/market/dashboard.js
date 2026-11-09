@@ -31,10 +31,47 @@
     var border = dark ? "#cbd5e1" : "#0f172a";
     Plotly.restyle(node, {
       hoverinfo: "none",
+      hovertemplate: "",
       "hoverlabel.bgcolor": bg,
       "hoverlabel.bordercolor": border,
       "hoverlabel.font.color": fg,
       "hoverlabel.font.size": 13,
+    });
+  }
+
+  function returnPoint(point, node) {
+    if (node && node.dataset.tipkind === "return") return true;
+    var layoutMeta = node && node.layout && node.layout.meta;
+    if (layoutMeta && layoutMeta.tip === "return") return true;
+    var meta = (point.fullData && point.fullData.meta) || (point.data && point.data.meta);
+    return meta === "return" || (meta && meta.tip === "return");
+  }
+
+  function closePrice(point) {
+    var index = point.pointNumber;
+    var stored = [];
+    stored.push(point.customdata, point.text);
+    if (point.data) {
+      if (point.data.customdata) stored.push(point.data.customdata[index]);
+      if (point.data.text) stored.push(point.data.text[index]);
+    }
+    if (point.fullData) {
+      if (point.fullData.customdata) stored.push(point.fullData.customdata[index]);
+      if (point.fullData.text) stored.push(point.fullData.text[index]);
+    }
+    for (var i = 0; i < stored.length; i++) {
+      var raw = stored[i];
+      if (Array.isArray(raw)) raw = raw[0];
+      var price = Number(raw);
+      if (isFinite(price)) return price;
+    }
+    return NaN;
+  }
+
+  function shillings(price) {
+    return "KSh " + price.toLocaleString("en-KE", {
+      minimumFractionDigits: Math.abs(price) < 1 ? 3 : 2,
+      maximumFractionDigits: Math.abs(price) < 1 ? 3 : 2,
     });
   }
 
@@ -60,7 +97,7 @@
     tip.replaceChildren();
   }
 
-  function showTip(data) {
+  function showTip(data, node) {
     var points = (data && data.points) || [];
     if (!points.length) return;
     var dark = document.documentElement.classList.contains("dark");
@@ -87,19 +124,17 @@
       name.textContent = point.data.name || "Price";
       var value = document.createElement("span");
       var number = Number(point.y);
-      var price = point.customdata && point.customdata.length ? Number(point.customdata[0]) : NaN;
-      if (point.data.meta === "return" && isFinite(number)) {
-        var sign = number > 0 ? "+" : "";
-        var priceText = isFinite(price)
-          ? "  ·  KSh " + price.toLocaleString("en-KE", {
-              minimumFractionDigits: Math.abs(price) < 1 ? 3 : 2,
-              maximumFractionDigits: Math.abs(price) < 1 ? 3 : 2,
-            })
-          : "";
-        value.textContent = sign + number.toLocaleString("en-KE", {
-          minimumFractionDigits: 2,
-          maximumFractionDigits: 2,
-        }) + "%" + priceText;
+      var price = closePrice(point);
+      if (returnPoint(point, node) && isFinite(price)) {
+        var change = "";
+        if (isFinite(number)) {
+          var sign = number > 0 ? "+" : "";
+          change = "  ·  " + sign + number.toLocaleString("en-KE", {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          }) + "%";
+        }
+        value.textContent = shillings(price) + change;
       } else {
         value.textContent = isFinite(number)
           ? number.toLocaleString("en-KE", { maximumFractionDigits: 2 })
@@ -124,7 +159,7 @@
   function bindTip(node) {
     if (node.dataset.tip === "1" || !node.on) return;
     node.dataset.tip = "1";
-    node.on("plotly_hover", showTip);
+    node.on("plotly_hover", function (data) { showTip(data, node); });
     node.addEventListener("mouseleave", hideTip);
   }
 
@@ -134,6 +169,9 @@
       var source = document.getElementById(node.getAttribute("data-chart"));
       if (!source || node.dataset.ready === "1") return;
       var figure = JSON.parse(source.textContent);
+      if (figure.layout && figure.layout.meta && figure.layout.meta.tip === "return") {
+        node.dataset.tipkind = "return";
+      }
       Plotly.newPlot(node, figure.data, figure.layout, {responsive: true, displayModeBar: false});
       node.dataset.ready = "1";
     });

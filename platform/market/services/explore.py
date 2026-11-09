@@ -300,7 +300,16 @@ def path_figure(window, title, bands, y="indexed", y_title=None, as_return=False
             zerolinecolor="#94a3b8",
             rangemode="tozero",
         )
-        fig.update_traces(meta="return")
+        fig.update_layout(meta={"tip": "return"})
+        for trace in fig.data:
+            closes = []
+            for row in list(trace.customdata or []):
+                try:
+                    closes.append(row[0])
+                except (TypeError, IndexError, KeyError):
+                    closes.append(row)
+            trace.text = [None if value is None or pd.isna(value) else float(value) for value in closes]
+            trace.meta = {"tip": "return"}
     color_by_name = {}
     for trace in fig.data:
         color_by_name[trace.name] = getattr(getattr(trace, "line", None), "color", None)
