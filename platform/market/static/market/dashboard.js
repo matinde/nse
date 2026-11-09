@@ -87,9 +87,24 @@
       name.textContent = point.data.name || "Price";
       var value = document.createElement("span");
       var number = Number(point.y);
-      value.textContent = isFinite(number)
-        ? number.toLocaleString("en-KE", { maximumFractionDigits: 2 })
-        : String(point.y);
+      var price = point.customdata && point.customdata.length ? Number(point.customdata[0]) : NaN;
+      if (point.data.meta === "return" && isFinite(number)) {
+        var sign = number > 0 ? "+" : "";
+        var priceText = isFinite(price)
+          ? "  ·  KSh " + price.toLocaleString("en-KE", {
+              minimumFractionDigits: Math.abs(price) < 1 ? 3 : 2,
+              maximumFractionDigits: Math.abs(price) < 1 ? 3 : 2,
+            })
+          : "";
+        value.textContent = sign + number.toLocaleString("en-KE", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        }) + "%" + priceText;
+      } else {
+        value.textContent = isFinite(number)
+          ? number.toLocaleString("en-KE", { maximumFractionDigits: 2 })
+          : String(point.y);
+      }
       row.appendChild(name);
       row.appendChild(value);
       tip.appendChild(row);

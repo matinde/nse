@@ -104,7 +104,7 @@
   {% endif %}
   <div class="mt-4 rounded-3xl border border-slate-200 bg-white p-3 dark:border-slate-800 dark:bg-slate-900">
     <h2 class="px-2 pt-2 text-lg font-semibold">Price path</h2>
-    <p class="px-2 text-xs text-slate-500">Each line starts at 100 on the first date in the range. The shaded band is the purchase date through the sell date.</p>
+    <p class="px-2 text-xs text-slate-500">Each line is the move from the close you would have paid on the purchase date, so a cheap share and an expensive one use the same scale. 0% is that price. The shaded band is the purchase date through the sell date. Hover a point to see the close in shillings. This is the share-price move, not the profit in the table, which still keeps cash that could not buy a whole share.</p>
     {% if sim.path %}
       <div id="sim-path" class="chart-frame" data-chart="sim-path-data"></div>
       {{ sim.path|json_script:"sim-path-data" }}

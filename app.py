@@ -601,11 +601,19 @@ def shade_band(fig, start, end, color):
         line_width=0,
     )
 
-def price_path_chart(frame, title, bands):
+def price_path_chart(frame, title, bands, y="indexed", y_title=None, as_return=False):
     """Price lines over a chosen window. bands are (name, start, end, color)."""
+    line_args = {}
+    if as_return:
+        line_args["custom_data"] = ["price"]
     fig = px.line(
-        frame, x="date", y="indexed", color="display_name", title=title,
-        labels={"date": "Trading date", "indexed": "Price path (starts at 100)", "display_name": "Company"},
+        frame, x="date", y=y, color="display_name", title=title,
+        labels={
+            "date": "Trading date",
+            "display_name": "Company",
+            y: y_title or ("Return since purchase (%)" if as_return else "Price path (starts at 100)"),
+        },
+        **line_args,
     )
     fig.update_layout(
         template="plotly_white", height=420, margin=dict(l=12, r=12, t=54, b=12),
@@ -616,6 +624,11 @@ def price_path_chart(frame, title, bands):
     )
     fig.update_xaxes(showgrid=False, linecolor="#dfe6ef")
     fig.update_yaxes(gridcolor="#edf1f6", zeroline=False)
+    if as_return:
+        fig.update_yaxes(ticksuffix="%", zeroline=True, zerolinewidth=1, zerolinecolor="#94a3b8", rangemode="tozero")
+        fig.update_traces(
+            hovertemplate="%{fullData.name}: %{y:+.2f}%<br>Close KSh %{customdata[0]:,.2f}<extra></extra>",
+        )
     color_by_name = {trace.name: trace.line.color for trace in fig.data}
     drawn = set()
     for name, start, end, color in bands:
@@ -626,7 +639,7 @@ def price_path_chart(frame, title, bands):
         shade_band(fig, start, end, color or _rgba(color_by_name.get(name), 0.2))
     return fig
 
-def show_holding_chart(equity_data, codes, min_date, max_date, bands, slider_key, caption):
+def show_holding_chart(equity_data, codes, min_date, max_date, bands, slider_key, caption, anchor=None):
     st.markdown("<div class='section-title'>Price path</div>", unsafe_allow_html=True)
     st.caption(caption)
     start_date, end_date = st.slider(
@@ -649,13 +662,42 @@ def show_holding_chart(equity_data, codes, min_date, max_date, bands, slider_key
         st.info("No prices in that date range for these stocks.")
         return
     window = window.sort_values(["Code", "date"])
-    window["base_price"] = window.groupby("Code")["price"].transform("first")
-    window = window[window["base_price"] > 0]
+    if anchor is None:
+        window["base_price"] = window.groupby("Code")["price"].transform("first")
+        window = window[window["base_price"] > 0]
+        if window.empty:
+            st.info("No prices in that date range for these stocks.")
+            return
+        window["indexed"] = window["price"] / window["base_price"] * 100
+        st.plotly_chart(price_path_chart(window, "Share prices across the dates you chose", bands), use_container_width=True)
+        return
+    bases = {}
+    for code in codes:
+        history = equity_data[equity_data["Code"] == code].sort_values("date")
+        before = history[history["date"] <= pd.Timestamp(anchor)]
+        if not before.empty and float(before.iloc[-1]["price"]) > 0:
+            bases[code] = float(before.iloc[-1]["price"])
+            continue
+        first = window[window["Code"] == code]
+        if not first.empty and float(first["price"].iloc[0]) > 0:
+            bases[code] = float(first["price"].iloc[0])
+    window["base_price"] = window["Code"].map(bases)
+    window = window[window["base_price"].fillna(0) > 0]
     if window.empty:
         st.info("No prices in that date range for these stocks.")
         return
-    window["indexed"] = window["price"] / window["base_price"] * 100
-    st.plotly_chart(price_path_chart(window, "Share prices across the dates you chose", bands), use_container_width=True)
+    window["return_pct"] = (window["price"] / window["base_price"] - 1) * 100
+    st.plotly_chart(
+        price_path_chart(
+            window,
+            "Return since the purchase date",
+            bands,
+            y="return_pct",
+            y_title="Return since purchase (%)",
+            as_return=True,
+        ),
+        use_container_width=True,
+    )
 
 def name_tokens(text):
     cleaned = str(text or "").lower()
@@ -1157,7 +1199,8 @@ if mode == "Single stock":
                     max_date,
                     estimate_bands,
                     "estimate_range",
-                    "Each line starts at 100 on the first date in the range. Drag the range across the dates we have. The shaded band is the purchase date through the sell date.",
+                    "Each line is the move from the close you would have paid on the purchase date, so a cheap share and an expensive one use the same scale. 0% is that price. Drag the range across the dates we have. The shaded band is the purchase date through the sell date. Hover a point to see the close in shillings. This is the share-price move, not the profit in the table, which still keeps cash that could not buy a whole share.",
+                    anchor=portfolio_purchase,
                 )
         with st.expander("How to read this"):
             st.markdown("""

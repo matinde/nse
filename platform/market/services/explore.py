@@ -232,6 +232,37 @@ def indexed_window(frame, codes, start, end):
     return window
 
 
+def return_window(frame, codes, start, end, purchase):
+    """Percent change from the same close the simulator would pay, not from the graph's first day.
+
+    A KSh 2 share and a KSh 200 share then share one scale: 0% is the purchase price.
+    """
+    window = frame[
+        frame["Code"].isin(list(codes))
+        & (frame["date"].dt.date >= start)
+        & (frame["date"].dt.date <= end)
+    ].copy()
+    if window.empty:
+        return None
+    window = window.sort_values(["Code", "date"])
+    bases = {}
+    for code in codes:
+        history = history_for(frame, code)
+        buy = nearest_on_or_before(history, purchase)
+        if buy is not None and float(buy["price"]) > 0:
+            bases[code] = float(buy["price"])
+            continue
+        first = window[window["Code"] == code]
+        if not first.empty and float(first["price"].iloc[0]) > 0:
+            bases[code] = float(first["price"].iloc[0])
+    window["base_price"] = window["Code"].map(bases)
+    window = window[window["base_price"].fillna(0) > 0]
+    if window.empty:
+        return None
+    window["return_pct"] = (window["price"] / window["base_price"] - 1) * 100
+    return window
+
+
 def _rgba(color, alpha=0.2):
     text = str(color or "#0f766e").strip()
     if text.startswith("#") and len(text) in {4, 7}:
@@ -243,16 +274,33 @@ def _rgba(color, alpha=0.2):
     return text
 
 
-def path_figure(window, title, bands):
+def path_figure(window, title, bands, y="indexed", y_title=None, as_return=False):
+    line_args = {}
+    if as_return:
+        line_args["custom_data"] = ["price"]
     fig = px.line(
         window,
         x="date",
-        y="indexed",
+        y=y,
         color="display_name",
         title=title,
-        labels={"date": "Trading date", "indexed": "Price path (starts at 100)", "display_name": "Company"},
+        labels={
+            "date": "Trading date",
+            "display_name": "Company",
+            y: y_title or ("Return since purchase (%)" if as_return else "Price path (starts at 100)"),
+        },
+        **line_args,
     )
     _layout(fig, 460, title)
+    if as_return:
+        fig.update_yaxes(
+            ticksuffix="%",
+            zeroline=True,
+            zerolinewidth=1,
+            zerolinecolor="#94a3b8",
+            rangemode="tozero",
+        )
+        fig.update_traces(meta="return")
     color_by_name = {}
     for trace in fig.data:
         color_by_name[trace.name] = getattr(getattr(trace, "line", None), "color", None)
@@ -415,8 +463,15 @@ def simulate_page(frame, pot, codes, alloc, buy, sell, chart_start, chart_end):
     bands = []
     if sell >= buy:
         bands = [("Held", buy, sell, "rgba(15,118,110,0.22)")]
-    window = indexed_window(frame, codes, chart_start, chart_end) if codes else None
-    path = path_figure(window, "Share prices across the dates you chose", bands) if window is not None else None
+    window = return_window(frame, codes, chart_start, chart_end, buy) if codes else None
+    path = path_figure(
+        window,
+        "",
+        bands,
+        y="return_pct",
+        y_title="Return since purchase (%)",
+        as_return=True,
+    ) if window is not None else None
     return {
         "notes": notes,
         "over": allocated > float(pot) + 0.01,
