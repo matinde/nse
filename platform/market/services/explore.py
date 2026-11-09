@@ -302,13 +302,19 @@ def path_figure(window, title, bands, y="indexed", y_title=None, as_return=False
         )
         fig.update_layout(meta={"tip": "return"})
         for trace in fig.data:
+            customdata = trace.customdata
             closes = []
-            for row in list(trace.customdata or []):
-                try:
-                    closes.append(row[0])
-                except (TypeError, IndexError, KeyError):
-                    closes.append(row)
-            trace.text = [None if value is None or pd.isna(value) else float(value) for value in closes]
+            if customdata is not None:
+                for row in list(customdata):
+                    try:
+                        value = row[0]
+                    except (TypeError, IndexError, KeyError):
+                        value = row
+                    try:
+                        closes.append(float(value))
+                    except (TypeError, ValueError):
+                        closes.append(None)
+            trace.text = closes
             trace.meta = {"tip": "return"}
     color_by_name = {}
     for trace in fig.data:
