@@ -300,9 +300,9 @@ def _remove_trade(request):
 
 @login_required
 def dashboard(request):
-    section = request.GET.get("section", "stock")
+    section = request.GET.get("section", "market")
     if section not in {"stock", "simulate", "portfolio", "market"}:
-        section = "stock"
+        section = "market"
     loaded = _frame_or_none()
     if isinstance(loaded, Exception):
         return render(request, "market/dashboard.html", {

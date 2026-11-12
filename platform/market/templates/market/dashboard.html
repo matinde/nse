@@ -8,8 +8,8 @@
       <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ request.user.username }}</p>
     </div>
     <nav class="flex gap-2 md:mt-8 md:flex-col">
+      <a href="/" class="rounded-2xl px-3 py-2 text-sm font-medium {% if section == 'market' %}bg-slate-900 text-white dark:bg-teal-500 dark:text-slate-950{% else %}text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800{% endif %}">Market</a>
       <a href="/?section=stock{% if focus_code %}&code={{ focus_code }}{% endif %}" class="rounded-2xl px-3 py-2 text-sm font-medium {% if section == 'stock' %}bg-slate-900 text-white dark:bg-teal-500 dark:text-slate-950{% else %}text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800{% endif %}">Stock</a>
-      <a href="/?section=market" class="rounded-2xl px-3 py-2 text-sm font-medium {% if section == 'market' %}bg-slate-900 text-white dark:bg-teal-500 dark:text-slate-950{% else %}text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800{% endif %}">Market</a>
       <a href="/?section=simulate" class="rounded-2xl px-3 py-2 text-sm font-medium {% if section == 'simulate' %}bg-slate-900 text-white dark:bg-teal-500 dark:text-slate-950{% else %}text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800{% endif %}">Simulate</a>
       <a href="/?section=portfolio" class="rounded-2xl px-3 py-2 text-sm font-medium {% if section == 'portfolio' %}bg-slate-900 text-white dark:bg-teal-500 dark:text-slate-950{% else %}text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800{% endif %}">Portfolio</a>
     </nav>
