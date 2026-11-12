@@ -339,7 +339,8 @@ def dashboard(request):
     else:
         direction = request.GET.get("direction") or "all"
         sector = request.GET.get("sector") or ""
-        context["board"] = market_board(frame, direction, sector)
+        trend = request.GET.get("trend") or "3m"
+        context["board"] = market_board(frame, direction, sector, trend)
     return render(request, "market/dashboard.html", context)
 
 

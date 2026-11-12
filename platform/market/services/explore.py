@@ -3,6 +3,7 @@
 import json
 import os
 import re
+from calendar import monthrange
 from datetime import date, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -386,16 +387,37 @@ def breadth_figure(sessions):
     return fig
 
 
-def market_board(frame, direction, sector):
+TREND_PERIODS = (
+    ("1m", "1 month", 1),
+    ("3m", "3 months", 3),
+    ("6m", "6 months", 6),
+    ("1y", "1 year", 12),
+)
+
+
+def _shift_months(day, months):
+    month = day.month - months
+    year = day.year
+    while month <= 0:
+        month += 12
+        year -= 1
+    last = monthrange(year, month)[1]
+    return date(year, month, min(day.day, last))
+
+
+def market_board(frame, direction, sector, trend="3m"):
     from market.services.afx import CODE_TO_SECTOR, SECTORS
 
     direction = direction if direction in {"up", "down"} else "all"
+    periods = {key: (label, months) for key, label, months in TREND_PERIODS}
+    trend_key = trend if trend in periods else "3m"
+    trend_label, trend_months = periods[trend_key]
     ordered = frame.sort_values(["Code", "date"]).copy()
     ordered["prior"] = ordered.groupby("Code")["price"].shift(1)
     dates = list(ordered["date"].drop_duplicates().sort_values())
     window = dates[-7:]
     latest = window[-1]
-    window_set = set(window)
+    trend_start = pd.Timestamp(_shift_months(latest.date(), trend_months))
     sessions = []
     for day in window:
         day_rows = ordered[ordered["date"] == day]
@@ -409,7 +431,8 @@ def market_board(frame, direction, sector):
             "flat": int((day_price == day_prior).sum()),
         })
     paths = {}
-    for code, group in ordered[ordered["date"].isin(window_set)].groupby("Code", sort=False):
+    trend_rows = ordered[(ordered["date"] >= trend_start) & (ordered["date"] <= latest)]
+    for code, group in trend_rows.groupby("Code", sort=False):
         paths[str(code)] = [float(value) for value in group["price"].tolist()]
     latest_rows = ordered[ordered["date"] == latest]
     shares = []
@@ -444,8 +467,8 @@ def market_board(frame, direction, sector):
             "day": pct(day_pct) if day_pct is not None else "—",
             "day_pct": day_pct,
             "day_state": state if day_pct is not None else "flat",
-            "week": pct(week_pct) if week_pct is not None else "—",
-            "week_state": _move_state(week_pct) if week_pct is not None else "flat",
+            "trend": pct(week_pct) if week_pct is not None else "—",
+            "trend_state": _move_state(week_pct) if week_pct is not None else "flat",
             "spark": _sparkline(series),
         })
     selected = sector if sector in {key for key, _label in SECTORS} or sector == "other" else ""
@@ -477,6 +500,9 @@ def market_board(frame, direction, sector):
         "down": down,
         "flat": flat,
         "direction": direction,
+        "trend": trend_key,
+        "trend_label": trend_label,
+        "trends": [{"key": key, "label": label} for key, label, _months in TREND_PERIODS],
         "sector": selected,
         "sectors": chips,
         "groups": groups,
