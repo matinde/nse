@@ -16,6 +16,7 @@ from market.services.explore import (
     coverage,
     default_purchase,
     load_equity_frame,
+    market_board,
     market_context,
     nairobi_today,
     parse_date,
@@ -96,6 +97,15 @@ def _stock_state(request, frame):
     return page
 
 
+def _roll_forward(posted, previous, pinned, latest):
+    """Keep a date the user chose. A date this page filled in earlier follows the newest close."""
+    if pinned:
+        return posted
+    if previous and posted.isoformat() == previous:
+        return latest
+    return posted
+
+
 def _sim_state(request, frame):
     earliest, latest = coverage(frame)
     symbols = _symbols(frame)
@@ -114,9 +124,9 @@ def _sim_state(request, frame):
     if not raw.get("alloc") or stored_codes != codes:
         alloc = split_amount(pot, codes)
     buy = clamp_date(parse_date(raw.get("buy"), default_purchase(earliest, latest)), earliest, latest)
-    sell = clamp_date(parse_date(raw.get("sell"), latest), earliest, latest)
+    sell = latest if not raw.get("sell_pinned") else clamp_date(parse_date(raw.get("sell"), latest), earliest, latest)
     chart_start = clamp_date(parse_date(raw.get("chart_start"), earliest), earliest, latest)
-    chart_end = clamp_date(parse_date(raw.get("chart_end"), latest), earliest, latest)
+    chart_end = latest if not raw.get("chart_end_pinned") else clamp_date(parse_date(raw.get("chart_end"), latest), earliest, latest)
     if chart_start > chart_end:
         chart_start, chart_end = earliest, latest
     state = {
@@ -125,8 +135,10 @@ def _sim_state(request, frame):
         "alloc": alloc,
         "buy": buy.isoformat(),
         "sell": sell.isoformat(),
+        "sell_pinned": bool(raw.get("sell_pinned")) and sell < latest,
         "chart_start": chart_start.isoformat(),
         "chart_end": chart_end.isoformat(),
+        "chart_end_pinned": bool(raw.get("chart_end_pinned")) and chart_end < latest,
     }
     if request.session.get("sim") != state:
         request.session["sim"] = state
@@ -155,10 +167,20 @@ def _save_sim(request, frame):
         messages.warning(request, "Only the first 8 stocks are used.")
     codes = posted[:8]
     buy = clamp_date(parse_date(request.POST.get("buy"), default_purchase(earliest, latest)), earliest, latest)
-    sell = clamp_date(parse_date(request.POST.get("sell"), latest), earliest, latest)
-    chart_start = clamp_date(parse_date(request.POST.get("chart_start"), earliest), earliest, latest)
-    chart_end = clamp_date(parse_date(request.POST.get("chart_end"), latest), earliest, latest)
     previous = request.session.get("sim") or {}
+    sell = _roll_forward(
+        clamp_date(parse_date(request.POST.get("sell"), latest), earliest, latest),
+        previous.get("sell"),
+        bool(previous.get("sell_pinned")),
+        latest,
+    )
+    chart_start = clamp_date(parse_date(request.POST.get("chart_start"), earliest), earliest, latest)
+    chart_end = _roll_forward(
+        clamp_date(parse_date(request.POST.get("chart_end"), latest), earliest, latest),
+        previous.get("chart_end"),
+        bool(previous.get("chart_end_pinned")),
+        latest,
+    )
     previous_key = (round(float(previous.get("pot", 0)), 2), tuple(previous.get("codes") or []))
     current_key = (round(pot, 2), tuple(codes))
     if current_key != previous_key or not codes:
@@ -193,8 +215,10 @@ def _save_sim(request, frame):
         "alloc": alloc,
         "buy": buy.isoformat(),
         "sell": sell.isoformat(),
+        "sell_pinned": sell < latest,
         "chart_start": chart_start.isoformat(),
         "chart_end": chart_end.isoformat(),
+        "chart_end_pinned": chart_end < latest,
     }
     request.session.modified = True
 
@@ -277,7 +301,7 @@ def _remove_trade(request):
 @login_required
 def dashboard(request):
     section = request.GET.get("section", "stock")
-    if section not in {"stock", "simulate", "portfolio"}:
+    if section not in {"stock", "simulate", "portfolio", "market"}:
         section = "stock"
     loaded = _frame_or_none()
     if isinstance(loaded, Exception):
@@ -310,8 +334,12 @@ def dashboard(request):
         context["focus_code"] = context["stock"].get("symbol", "")
     elif section == "simulate":
         context["sim"] = _sim_state(request, frame)
-    else:
+    elif section == "portfolio":
         context["portfolio"] = portfolio_page(request.user, frame)
+    else:
+        direction = request.GET.get("direction") or "all"
+        sector = request.GET.get("sector") or ""
+        context["board"] = market_board(frame, direction, sector)
     return render(request, "market/dashboard.html", context)
 
 

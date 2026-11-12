@@ -1,14 +1,25 @@
-from datetime import date
+from datetime import date, datetime, timedelta
+from pathlib import Path
 
+import requests
 from django.conf import settings
+from django.core.cache import cache
 from django.db import transaction
 from django.utils import timezone
 
 from market.models import DailyPrice, IngestRun, Symbol
-from market.services.afx import BoardParseError, SessionNotClosed, fetch_nse_board
-from market.services.csv_import import load_price_rows, merge_missing_seed_rows
-from market.services.month_csv import append_rows
-from market.services.rows import PriceRow, parse_date
+from market.services.afx import (
+    HISTORY_URL,
+    NAIROBI,
+    BoardParseError,
+    SessionNotClosed,
+    fetch_html,
+    fetch_nse_board,
+    parse_history,
+)
+from market.services.csv_import import load_price_rows, merge_missing_seed_rows, read_price_file
+from market.services.month_csv import append_rows, existing_keys, month_path
+from market.services.rows import PriceRow, month_file_sort_key, parse_date
 
 
 def import_csvs() -> int:
@@ -25,10 +36,13 @@ def import_csvs() -> int:
 
 
 def fetch_session_closes() -> int:
+    gap_rows = fill_missing_closes()
     try:
         session_date, quotes = fetch_nse_board()
     except SessionNotClosed:
-        raise
+        if not gap_rows:
+            raise
+        session_date, quotes = None, []
     except BoardParseError as exc:
         run = IngestRun.objects.create(kind=IngestRun.KIND_BOARD)
         _finish(run, IngestRun.STATUS_FAILED, 0, str(exc))
@@ -37,11 +51,14 @@ def fetch_session_closes() -> int:
     run = IngestRun.objects.create(kind=IngestRun.KIND_BOARD)
     written = 0
     try:
-        live_start = parse_date(settings.LIVE_FEED_START)
-        if session_date < live_start:
-            _finish(run, IngestRun.STATUS_SUCCESS, 0, "Session date is before the live feed.")
-            return 0
-        written = _store_new_rows(session_date, quotes)
+        if gap_rows:
+            written += upsert_prices(gap_rows, DailyPrice.SOURCE_BOARD)
+        if session_date is not None:
+            live_start = parse_date(settings.LIVE_FEED_START)
+            if session_date < live_start:
+                _finish(run, IngestRun.STATUS_SUCCESS, written, "Session date is before the live feed.")
+                return written
+            written += _store_new_rows(session_date, quotes)
     except Exception as exc:
         _finish(run, IngestRun.STATUS_FAILED, written, str(exc))
         raise
@@ -93,7 +110,82 @@ def upsert_prices(rows: list[PriceRow], source: str) -> int:
                 ],
             )
             written += len(batch)
+    if written:
+        cache.delete("nse-equity-frame-v1")
     return written
+
+
+def closed_session_date(now: datetime | None = None) -> date:
+    """Last session whose close is allowed into the files."""
+    moment = now or datetime.now(NAIROBI)
+    if (moment.hour, moment.minute) < (15, 30):
+        return moment.date() - timedelta(days=1)
+    return moment.date()
+
+
+def fill_missing_closes(data_dir: Path | None = None) -> list[PriceRow]:
+    """Add sessions the daily board missed.
+
+    The statistics page only publishes the latest session. A few days offline
+    used to leave a hole through the previous close, so the price path stopped
+    early. Recent history pages still have those sessions.
+    """
+    root = Path(data_dir or settings.DATA_DIR)
+    last_seen = _last_sessions(root)
+    if not last_seen:
+        return []
+    through = closed_session_date()
+    newest = max(seen for seen, _name in last_seen.values())
+    cutoff = newest - timedelta(days=21)
+    behind = {
+        code: (seen, name)
+        for code, (seen, name) in last_seen.items()
+        if cutoff <= seen < through
+    }
+    if not behind:
+        return []
+    fresh: list[PriceRow] = []
+    client = requests.Session()
+    for code, (seen, name) in sorted(behind.items()):
+        try:
+            html = fetch_html(HISTORY_URL.format(code=code.lower()), client)
+        except requests.RequestException:
+            continue
+        for row in parse_history(html, code, name):
+            if seen < row.trade_date <= through:
+                fresh.append(row)
+    if not fresh:
+        return []
+    added: list[PriceRow] = []
+    by_date: dict[date, list[PriceRow]] = {}
+    for row in fresh:
+        by_date.setdefault(row.trade_date, []).append(row)
+    for trade_date in sorted(by_date):
+        path = month_path(root, trade_date)
+        present = existing_keys(path)
+        batch = []
+        seen_codes = set()
+        for row in by_date[trade_date]:
+            if row.code in seen_codes or (trade_date, row.code) in present:
+                continue
+            seen_codes.add(row.code)
+            batch.append(row)
+        if not batch:
+            continue
+        append_rows(root, trade_date, batch)
+        added.extend(batch)
+    return added
+
+
+def _last_sessions(data_dir: Path) -> dict[str, tuple[date, str]]:
+    found: dict[str, tuple[date, str]] = {}
+    paths = sorted(data_dir.glob("NSE_*_prices.csv"), key=lambda path: month_file_sort_key(path.name))
+    for path in paths:
+        for row in read_price_file(path):
+            current = found.get(row.code)
+            if current is None or row.trade_date >= current[0]:
+                found[row.code] = (row.trade_date, row.name or row.code)
+    return found
 
 
 def _store_new_rows(trade_date: date, rows: list[PriceRow]) -> int:

@@ -97,6 +97,65 @@
     tip.replaceChildren();
   }
 
+  function customRow(point) {
+    var index = point.pointNumber;
+    var stored = [point.customdata];
+    if (point.data && point.data.customdata) stored.push(point.data.customdata[index]);
+    if (point.fullData && point.fullData.customdata) stored.push(point.fullData.customdata[index]);
+    for (var i = 0; i < stored.length; i++) {
+      if (Array.isArray(stored[i]) && stored[i].length > 1) return stored[i];
+    }
+    return [];
+  }
+
+  function tipLine(label, value) {
+    var row = document.createElement("div");
+    row.style.display = "flex";
+    row.style.justifyContent = "space-between";
+    row.style.gap = "16px";
+    var name = document.createElement("span");
+    name.textContent = label;
+    var amount = document.createElement("span");
+    amount.textContent = value;
+    row.appendChild(name);
+    row.appendChild(amount);
+    return row;
+  }
+
+  function placeTip(data) {
+    var mouse = data.event || {};
+    var left = (mouse.clientX || 0) + 16;
+    var top = (mouse.clientY || 0) + 16;
+    tip.style.left = left + "px";
+    tip.style.top = top + "px";
+    var box = tip.getBoundingClientRect();
+    if (left + box.width > window.innerWidth - 8) left = Math.max(8, (mouse.clientX || 0) - box.width - 16);
+    if (top + box.height > window.innerHeight - 8) top = Math.max(8, window.innerHeight - box.height - 8);
+    tip.style.left = left + "px";
+    tip.style.top = top + "px";
+  }
+
+  function showRankTip(point) {
+    var row = customRow(point);
+    var company = row[0] || String(point.y || "");
+    var gain = Number(row[1]);
+    var pct = Number(point.x);
+    var heading = document.createElement("div");
+    heading.style.fontWeight = "650";
+    heading.style.marginBottom = "6px";
+    heading.textContent = company + (point.y ? " · " + point.y : "");
+    tip.appendChild(heading);
+    if (isFinite(pct)) {
+      var sign = pct > 0 ? "+" : "";
+      tip.appendChild(tipLine("Return", sign + pct.toLocaleString("en-KE", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }) + "%"));
+    }
+    if (isFinite(gain)) tip.appendChild(tipLine("Profit / loss", shillings(gain)));
+    if (row[2] && row[3]) tip.appendChild(tipLine("Dates", row[2] + " → " + row[3]));
+  }
+
   function showTip(data, node) {
     var points = (data && data.points) || [];
     if (!points.length) return;
@@ -106,6 +165,11 @@
     tip.style.color = dark ? "#f8fafc" : "#0f172a";
     tip.style.borderColor = dark ? "#cbd5e1" : "#0f172a";
     tip.replaceChildren();
+    if (node && node.dataset.tipkind === "rank") {
+      showRankTip(points[0]);
+      placeTip(data);
+      return;
+    }
     var when = document.createElement("div");
     when.style.fontWeight = "650";
     when.style.marginBottom = "6px";
@@ -144,16 +208,7 @@
       row.appendChild(value);
       tip.appendChild(row);
     });
-    var mouse = data.event || {};
-    var left = (mouse.clientX || 0) + 16;
-    var top = (mouse.clientY || 0) + 16;
-    tip.style.left = left + "px";
-    tip.style.top = top + "px";
-    var box = tip.getBoundingClientRect();
-    if (left + box.width > window.innerWidth - 8) left = Math.max(8, (mouse.clientX || 0) - box.width - 16);
-    if (top + box.height > window.innerHeight - 8) top = Math.max(8, window.innerHeight - box.height - 8);
-    tip.style.left = left + "px";
-    tip.style.top = top + "px";
+    placeTip(data);
   }
 
   function bindTip(node) {
@@ -169,8 +224,8 @@
       var source = document.getElementById(node.getAttribute("data-chart"));
       if (!source || node.dataset.ready === "1") return;
       var figure = JSON.parse(source.textContent);
-      if (figure.layout && figure.layout.meta && figure.layout.meta.tip === "return") {
-        node.dataset.tipkind = "return";
+      if (figure.layout && figure.layout.meta && figure.layout.meta.tip) {
+        node.dataset.tipkind = figure.layout.meta.tip;
       }
       Plotly.newPlot(node, figure.data, figure.layout, {responsive: true, displayModeBar: false});
       node.dataset.ready = "1";

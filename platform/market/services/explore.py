@@ -335,19 +335,172 @@ def path_figure(window, title, bands, y="indexed", y_title=None, as_return=False
     return fig
 
 
+def _volume_fmt(value):
+    if value is None or pd.isna(value):
+        return "—"
+    return f"{int(value):,}"
+
+
+def _move_state(change):
+    if change is None or pd.isna(change):
+        return "flat"
+    if change > 0:
+        return "up"
+    if change < 0:
+        return "down"
+    return "flat"
+
+
+def _sparkline(prices):
+    from django.utils.safestring import mark_safe
+
+    if len(prices) < 2:
+        return ""
+    width, height = 76, 28
+    low = min(prices)
+    high = max(prices)
+    span = high - low or 1.0
+    step = width / (len(prices) - 1)
+    coords = []
+    for index, price in enumerate(prices):
+        x = index * step
+        y = 2 + (height - 4) * (1 - (price - low) / span)
+        coords.append(f"{x:.1f},{y:.1f}")
+    svg = (
+        f'<svg viewBox="0 0 {width} {height}" width="{width}" height="{height}" aria-hidden="true">'
+        f'<polyline points="{" ".join(coords)}" fill="none" stroke="currentColor" stroke-width="1.75" '
+        f'stroke-linecap="round" stroke-linejoin="round"/></svg>'
+    )
+    return mark_safe(svg)
+
+
+def breadth_figure(sessions):
+    fig = go.Figure(data=[
+        go.Bar(name="Up", x=[row["label"] for row in sessions], y=[row["up"] for row in sessions], marker_color="#0f766e"),
+        go.Bar(name="Down", x=[row["label"] for row in sessions], y=[row["down"] for row in sessions], marker_color="#be123c"),
+        go.Bar(name="Unchanged", x=[row["label"] for row in sessions], y=[row["flat"] for row in sessions], marker_color="#94a3b8"),
+    ])
+    fig = _layout(fig, 340, "Last seven sessions")
+    fig.update_layout(barmode="group", legend=dict(orientation="h", y=1.14, x=0))
+    fig.update_yaxes(title_text="Shares")
+    return fig
+
+
+def market_board(frame, direction, sector):
+    from market.services.afx import CODE_TO_SECTOR, SECTORS
+
+    direction = direction if direction in {"up", "down"} else "all"
+    ordered = frame.sort_values(["Code", "date"]).copy()
+    ordered["prior"] = ordered.groupby("Code")["price"].shift(1)
+    dates = list(ordered["date"].drop_duplicates().sort_values())
+    window = dates[-7:]
+    latest = window[-1]
+    window_set = set(window)
+    sessions = []
+    for day in window:
+        day_rows = ordered[ordered["date"] == day]
+        comparable = day_rows[day_rows["prior"].notna()]
+        day_price = comparable["price"].round(4)
+        day_prior = comparable["prior"].round(4)
+        sessions.append({
+            "label": f"{day:%d %b %Y}",
+            "up": int((day_price > day_prior).sum()),
+            "down": int((day_price < day_prior).sum()),
+            "flat": int((day_price == day_prior).sum()),
+        })
+    paths = {}
+    for code, group in ordered[ordered["date"].isin(window_set)].groupby("Code", sort=False):
+        paths[str(code)] = [float(value) for value in group["price"].tolist()]
+    latest_rows = ordered[ordered["date"] == latest]
+    shares = []
+    up = down = flat = 0
+    present = set()
+    for row in latest_rows.itertuples(index=False):
+        code = str(row.Code)
+        key = CODE_TO_SECTOR.get(code, "other")
+        present.add(key)
+        day_pct = None
+        if pd.notna(row.prior) and float(row.prior) > 0:
+            rounded_price = round(float(row.price), 4)
+            rounded_prior = round(float(row.prior), 4)
+            day_pct = (rounded_price - rounded_prior) / rounded_prior * 100
+        state = _move_state(day_pct)
+        if state == "up":
+            up += 1
+        elif state == "down":
+            down += 1
+        elif day_pct is not None:
+            flat += 1
+        series = paths.get(code, [])
+        week_pct = None
+        if len(series) >= 2 and series[0] > 0:
+            week_pct = (series[-1] / series[0] - 1) * 100
+        shares.append({
+            "code": code,
+            "name": str(row.display_name),
+            "sector": key,
+            "price": price_fmt(row.price),
+            "volume": _volume_fmt(row.volume),
+            "day": pct(day_pct) if day_pct is not None else "—",
+            "day_pct": day_pct,
+            "day_state": state if day_pct is not None else "flat",
+            "week": pct(week_pct) if week_pct is not None else "—",
+            "week_state": _move_state(week_pct) if week_pct is not None else "flat",
+            "spark": _sparkline(series),
+        })
+    selected = sector if sector in {key for key, _label in SECTORS} or sector == "other" else ""
+    if selected:
+        shares = [row for row in shares if row["sector"] == selected]
+    if direction == "up":
+        shares = [row for row in shares if row["day_pct"] is not None and row["day_pct"] > 0]
+    elif direction == "down":
+        shares = [row for row in shares if row["day_pct"] is not None and row["day_pct"] < 0]
+    shares.sort(key=lambda row: (row["day_pct"] is None, -(row["day_pct"] or 0), row["code"]))
+    labels = dict(SECTORS)
+    labels["other"] = "Other"
+    order = [key for key, _label in SECTORS if key in present]
+    if "other" in present:
+        order.append("other")
+    groups = []
+    for key in order:
+        if selected and key != selected:
+            continue
+        rows = [row for row in shares if row["sector"] == key]
+        if not rows:
+            continue
+        groups.append({"key": key, "label": labels[key], "rows": rows})
+    chips = [{"key": key, "label": labels[key]} for key in order]
+    return {
+        "session": f"{latest:%d %b %Y}",
+        "listed": int(len(latest_rows)),
+        "up": up,
+        "down": down,
+        "flat": flat,
+        "direction": direction,
+        "sector": selected,
+        "sectors": chips,
+        "groups": groups,
+        "chart": figure_json(breadth_figure(sessions)),
+    }
+
+
 def rank_figure(rows):
     frame = pd.DataFrame(rows).sort_values("gain_pct")
-    fig = px.bar(
-        frame,
-        x="gain_pct",
-        y="Code",
+    fig = go.Figure(data=[go.Bar(
+        x=frame["gain_pct"],
+        y=frame["Code"],
         orientation="h",
-        hover_data=["Company", "gain"],
-        labels={"gain_pct": "Return (%)", "Code": ""},
-        title="Ranked by return",
-    )
-    fig.update_xaxes(ticksuffix="%")
-    return _layout(fig, max(220, 46 * len(frame) + 80), "Ranked by return")
+        text=[f"{value:+.2f}%" for value in frame["gain_pct"]],
+        textposition="outside",
+        cliponaxis=False,
+        customdata=list(zip(frame["Company"], frame["gain"], frame["bought"], frame["sold"])),
+        marker_color=["#0f766e" if value >= 0 else "#be123c" for value in frame["gain_pct"]],
+        meta={"tip": "rank"},
+    )])
+    fig.update_xaxes(ticksuffix="%", title_text="Return (%)")
+    fig = _layout(fig, max(220, 46 * len(frame) + 80), "Ranked by return")
+    fig.update_layout(margin=dict(l=88, r=88, t=48, b=72), meta={"tip": "rank"})
+    return fig
 
 
 def stock_page(frame, symbol, start, end, style, amount, buy, sell):
@@ -456,6 +609,8 @@ def simulate_page(frame, pot, codes, alloc, buy, sell, chart_start, chart_end):
                 "Company": row["company"],
                 "gain_pct": row["gain_pct"],
                 "gain": row["gain"],
+                "bought": f"{row['buy_date']:%d %b %Y}",
+                "sold": f"{row['sell_date']:%d %b %Y}",
             })
         share_value = sum(row["value"] for row in holdings)
         rounding_cash = sum(row["cash_left"] for row in holdings)
