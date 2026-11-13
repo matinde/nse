@@ -9,12 +9,10 @@ from django.utils import timezone
 
 from market.models import DailyPrice, IngestRun, PendingListing, Symbol
 from market.services.afx import (
-    CODE_TO_SECTOR,
     HISTORY_URL,
     ISIN_TO_CODE,
     NAIROBI,
     BoardParseError,
-    SessionNotClosed,
     fetch_html,
     fetch_nse_board,
     parse_history,
@@ -38,13 +36,8 @@ def import_csvs() -> int:
 
 
 def fetch_session_closes() -> int:
-    gap_rows = fill_missing_closes()
     try:
         session_date, quotes, unmapped = fetch_nse_board(_isin_to_code())
-    except SessionNotClosed:
-        if not gap_rows:
-            raise
-        session_date, quotes, unmapped = None, [], []
     except BoardParseError as exc:
         run = IngestRun.objects.create(kind=IngestRun.KIND_BOARD)
         _finish(run, IngestRun.STATUS_FAILED, 0, str(exc))
@@ -53,8 +46,6 @@ def fetch_session_closes() -> int:
     run = IngestRun.objects.create(kind=IngestRun.KIND_BOARD)
     written = 0
     try:
-        if gap_rows:
-            written += upsert_prices(gap_rows, DailyPrice.SOURCE_BOARD)
         if session_date is not None:
             live_start = parse_date(settings.LIVE_FEED_START)
             if session_date < live_start:
@@ -187,52 +178,19 @@ def _append_absent(rows: list[PriceRow], data_dir: Path | None = None) -> list[P
 
 
 def backfill_symbol_history(code: str) -> int:
-    """Store history-page sessions through the last closed session.
+    """Store the latest NSE session for one ticker.
 
-    Sessions already in the month file are left unchanged. A ticker with no
-    saved close yet still gets every printed day, including today.
+    The NSE statistics tables publish the current session only.
     """
-    symbol = _symbol_for_backfill(code)
-    first = (
-        DailyPrice.objects.filter(symbol=symbol)
-        .order_by("trade_date")
-        .values_list("trade_date", flat=True)
-        .first()
-    )
-    through = closed_session_date()
-    try:
-        html = fetch_html(HISTORY_URL.format(code=code.lower()))
-    except requests.RequestException as exc:
-        raise LookupError(f"The history page for {code} could not be read.") from exc
-    fresh = []
-    for row in parse_history(html, code, symbol.name or code):
-        if row.trade_date > through:
-            continue
-        if first is not None and row.trade_date >= first:
-            continue
-        row.isin = symbol.isin or ""
-        row.sector = symbol.sector or ""
-        fresh.append(row)
-    added = _append_absent(fresh)
-    if not added:
-        return 0
-    return upsert_prices(added, DailyPrice.SOURCE_BOARD)
-
-
-def _symbol_for_backfill(code: str) -> Symbol:
-    symbol = Symbol.objects.filter(code=code).first()
-    if symbol is not None:
-        return symbol
-    isin = next((value for value, mapped in ISIN_TO_CODE.items() if mapped == code), None)
-    if isin is None:
-        raise LookupError(f"{code} is not a known symbol yet.")
-    return Symbol.objects.create(
-        code=code,
-        name=code,
-        isin=isin,
-        sector=CODE_TO_SECTOR.get(code, ""),
-        is_index=code.startswith("^"),
-    )
+    session_date, quotes, unmapped = fetch_nse_board(_isin_to_code())
+    chosen = [row for row in quotes if row.code == code]
+    if not chosen:
+        raise LookupError(f"{code} is not on the NSE sector tables for {session_date}.")
+    live_start = parse_date(settings.LIVE_FEED_START)
+    if session_date < live_start:
+        raise LookupError("Session date is before the live feed.")
+    _save_unmapped(session_date, unmapped)
+    return _store_new_rows(session_date, chosen)
 
 
 def _last_sessions(data_dir: Path) -> dict[str, tuple[date, str]]:
