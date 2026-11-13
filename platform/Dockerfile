@@ -8,7 +8,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DJANGO_SETTINGS_MODULE=config.settings
 
 COPY platform/requirements.txt .
-RUN apt-get update && apt-get install -y --no-install-recommends nginx \
+RUN apt-get update && apt-get install -y --no-install-recommends nginx libgomp1 libglib2.0-0 libgl1 \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --upgrade pip \
     && pip install --retries 10 --timeout 120 -r requirements.txt

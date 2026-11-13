@@ -14,9 +14,9 @@ from market.services.afx import (
     NAIROBI,
     BoardParseError,
     fetch_html,
-    fetch_nse_board,
     parse_history,
 )
+from market.services.pricelist import fetch_equity_list
 from market.services.csv_import import load_price_rows, merge_missing_seed_rows, read_price_file
 from market.services.month_csv import append_rows, existing_keys, month_path
 from market.services.rows import PriceRow, month_file_sort_key, parse_date
@@ -37,7 +37,7 @@ def import_csvs() -> int:
 
 def fetch_session_closes() -> int:
     try:
-        session_date, quotes, unmapped = fetch_nse_board(_isin_to_code().get)
+        session_date, quotes, unmapped = fetch_equity_list(_isin_to_code().get)
     except BoardParseError as exc:
         run = IngestRun.objects.create(kind=IngestRun.KIND_BOARD)
         _finish(run, IngestRun.STATUS_FAILED, 0, str(exc))
@@ -178,14 +178,11 @@ def _append_absent(rows: list[PriceRow], data_dir: Path | None = None) -> list[P
 
 
 def backfill_symbol_history(code: str) -> int:
-    """Store the latest NSE session for one ticker.
-
-    The NSE statistics tables publish the current session only.
-    """
-    session_date, quotes, unmapped = fetch_nse_board(_isin_to_code().get)
+    """Store the latest daily price-list session for one ticker."""
+    session_date, quotes, unmapped = fetch_equity_list(_isin_to_code().get)
     chosen = [row for row in quotes if row.code == code]
     if not chosen:
-        raise LookupError(f"{code} is not on the NSE sector tables for {session_date}.")
+        raise LookupError(f"{code} is not on the NSE daily price list for {session_date}.")
     live_start = parse_date(settings.LIVE_FEED_START)
     if session_date < live_start:
         raise LookupError("Session date is before the live feed.")

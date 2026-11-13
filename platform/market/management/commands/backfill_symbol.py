@@ -5,7 +5,7 @@ from market.services.ingest import backfill_symbol_history
 
 
 class Command(BaseCommand):
-    help = "Store today's NSE close for one ticker. The NSE tables do not publish earlier sessions."
+    help = "Store today's close for one ticker from the NSE daily equity price list."
 
     def add_arguments(self, parser):
         parser.add_argument("code")
