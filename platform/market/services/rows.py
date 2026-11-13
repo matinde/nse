@@ -121,3 +121,5 @@ class PriceRow:
     change_text: str = ""
     change_pct_text: str = ""
     volume_text: str = ""
+    isin: str = ""
+    sector: str = ""

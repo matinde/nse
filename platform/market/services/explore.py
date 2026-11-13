@@ -61,7 +61,7 @@ def load_equity_frame():
     from django.core.cache import cache
     from market.models import DailyPrice
 
-    cached = cache.get("nse-equity-frame-v1")
+    cached = cache.get("nse-equity-frame-v2")
     if cached is not None:
         return cached
     rows = list(
@@ -76,14 +76,27 @@ def load_equity_frame():
             "volume",
             "day_low",
             "day_high",
+            "symbol__sector",
         )
     )
     if not rows:
         raise RuntimeError("Price data has not been imported yet.")
     data = pd.DataFrame(
         rows,
-        columns=["Code", "Name", "recorded_name", "trade_date", "price", "previous", "volume", "day_low", "day_high"],
+        columns=[
+            "Code",
+            "Name",
+            "recorded_name",
+            "trade_date",
+            "price",
+            "previous",
+            "volume",
+            "day_low",
+            "day_high",
+            "sector_key",
+        ],
     )
+    data["sector_key"] = data["sector_key"].fillna("").astype(str).replace({"None": "", "nan": ""})
     data["date"] = pd.to_datetime(data["trade_date"])
     for column in ("price", "previous", "volume", "day_low", "day_high"):
         data[column] = pd.to_numeric(data[column], errors="coerce")
@@ -93,7 +106,7 @@ def load_equity_frame():
     symbol_names = data.sort_values("date").groupby("Code")["Name"].last()
     chosen = latest_names.where(latest_names.fillna("").astype(str).str.strip() != "", symbol_names)
     data["display_name"] = data["Code"].map(chosen).fillna(data["Name"])
-    cache.set("nse-equity-frame-v1", data, 60)
+    cache.set("nse-equity-frame-v2", data, 60)
     return data
 
 
@@ -440,7 +453,8 @@ def market_board(frame, direction, sector, trend="3m"):
     present = set()
     for row in latest_rows.itertuples(index=False):
         code = str(row.Code)
-        key = CODE_TO_SECTOR.get(code, "other")
+        stored = str(getattr(row, "sector_key", "") or "").strip()
+        key = stored or CODE_TO_SECTOR.get(code, "other")
         present.add(key)
         day_pct = None
         if pd.notna(row.prior) and float(row.prior) > 0:

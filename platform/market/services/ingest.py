@@ -7,9 +7,11 @@ from django.core.cache import cache
 from django.db import transaction
 from django.utils import timezone
 
-from market.models import DailyPrice, IngestRun, Symbol
+from market.models import DailyPrice, IngestRun, PendingListing, Symbol
 from market.services.afx import (
+    CODE_TO_SECTOR,
     HISTORY_URL,
+    ISIN_TO_CODE,
     NAIROBI,
     BoardParseError,
     SessionNotClosed,
@@ -38,11 +40,11 @@ def import_csvs() -> int:
 def fetch_session_closes() -> int:
     gap_rows = fill_missing_closes()
     try:
-        session_date, quotes = fetch_nse_board()
+        session_date, quotes, unmapped = fetch_nse_board(_isin_to_code())
     except SessionNotClosed:
         if not gap_rows:
             raise
-        session_date, quotes = None, []
+        session_date, quotes, unmapped = None, [], []
     except BoardParseError as exc:
         run = IngestRun.objects.create(kind=IngestRun.KIND_BOARD)
         _finish(run, IngestRun.STATUS_FAILED, 0, str(exc))
@@ -56,9 +58,11 @@ def fetch_session_closes() -> int:
         if session_date is not None:
             live_start = parse_date(settings.LIVE_FEED_START)
             if session_date < live_start:
+                _save_unmapped(session_date, unmapped)
                 _finish(run, IngestRun.STATUS_SUCCESS, written, "Session date is before the live feed.")
                 return written
             written += _store_new_rows(session_date, quotes)
+            _save_unmapped(session_date, unmapped)
     except Exception as exc:
         _finish(run, IngestRun.STATUS_FAILED, written, str(exc))
         raise
@@ -111,7 +115,7 @@ def upsert_prices(rows: list[PriceRow], source: str) -> int:
             )
             written += len(batch)
     if written:
-        cache.delete("nse-equity-frame-v1")
+        cache.delete("nse-equity-frame-v2")
     return written
 
 
@@ -154,15 +158,20 @@ def fill_missing_closes(data_dir: Path | None = None) -> list[PriceRow]:
         for row in parse_history(html, code, name):
             if seen < row.trade_date <= through:
                 fresh.append(row)
-    if not fresh:
+    return _append_absent(fresh, root)
+
+
+def _append_absent(rows: list[PriceRow], data_dir: Path | None = None) -> list[PriceRow]:
+    """Append rows that are not already in that session's month file."""
+    if not rows:
         return []
+    root = Path(data_dir or settings.DATA_DIR)
     added: list[PriceRow] = []
     by_date: dict[date, list[PriceRow]] = {}
-    for row in fresh:
+    for row in rows:
         by_date.setdefault(row.trade_date, []).append(row)
     for trade_date in sorted(by_date):
-        path = month_path(root, trade_date)
-        present = existing_keys(path)
+        present = existing_keys(month_path(root, trade_date))
         batch = []
         seen_codes = set()
         for row in by_date[trade_date]:
@@ -175,6 +184,55 @@ def fill_missing_closes(data_dir: Path | None = None) -> list[PriceRow]:
         append_rows(root, trade_date, batch)
         added.extend(batch)
     return added
+
+
+def backfill_symbol_history(code: str) -> int:
+    """Store history-page sessions through the last closed session.
+
+    Sessions already in the month file are left unchanged. A ticker with no
+    saved close yet still gets every printed day, including today.
+    """
+    symbol = _symbol_for_backfill(code)
+    first = (
+        DailyPrice.objects.filter(symbol=symbol)
+        .order_by("trade_date")
+        .values_list("trade_date", flat=True)
+        .first()
+    )
+    through = closed_session_date()
+    try:
+        html = fetch_html(HISTORY_URL.format(code=code.lower()))
+    except requests.RequestException as exc:
+        raise LookupError(f"The history page for {code} could not be read.") from exc
+    fresh = []
+    for row in parse_history(html, code, symbol.name or code):
+        if row.trade_date > through:
+            continue
+        if first is not None and row.trade_date >= first:
+            continue
+        row.isin = symbol.isin or ""
+        row.sector = symbol.sector or ""
+        fresh.append(row)
+    added = _append_absent(fresh)
+    if not added:
+        return 0
+    return upsert_prices(added, DailyPrice.SOURCE_BOARD)
+
+
+def _symbol_for_backfill(code: str) -> Symbol:
+    symbol = Symbol.objects.filter(code=code).first()
+    if symbol is not None:
+        return symbol
+    isin = next((value for value, mapped in ISIN_TO_CODE.items() if mapped == code), None)
+    if isin is None:
+        raise LookupError(f"{code} is not a known symbol yet.")
+    return Symbol.objects.create(
+        code=code,
+        name=code,
+        isin=isin,
+        sector=CODE_TO_SECTOR.get(code, ""),
+        is_index=code.startswith("^"),
+    )
 
 
 def _last_sessions(data_dir: Path) -> dict[str, tuple[date, str]]:
@@ -215,31 +273,93 @@ def _store_new_rows(trade_date: date, rows: list[PriceRow]) -> int:
     return written
 
 
-def _ensure_symbols(rows: list[PriceRow]) -> dict[str, Symbol]:
-    latest_name: dict[str, tuple[date, str]] = {}
+def _isin_to_code() -> dict[str, str]:
+    """Ticker for each ISIN. A symbol row wins over the seeded map."""
+    found = dict(ISIN_TO_CODE)
+    stored = Symbol.objects.exclude(isin__isnull=True).exclude(isin="").values_list("isin", "code")
+    for isin, code in stored:
+        found[isin] = code
+    return found
+
+
+def _save_unmapped(session_date: date, rows) -> None:
+    """Remember sector-table names that still have no ticker. Prices stay unwritten."""
     for row in rows:
-        current = latest_name.get(row.code)
+        PendingListing.objects.update_or_create(
+            isin=row.isin,
+            defaults={
+                "name": row.name,
+                "sector": row.sector,
+                "session_date": session_date,
+                "day_price": row.day_price,
+                "volume": row.volume,
+                "change_pct": row.change_pct,
+            },
+        )
+    resolved = set(ISIN_TO_CODE)
+    resolved.update(
+        Symbol.objects.exclude(isin__isnull=True).exclude(isin="").values_list("isin", flat=True)
+    )
+    if resolved:
+        PendingListing.objects.filter(isin__in=resolved).delete()
+
+
+def _ensure_symbols(rows: list[PriceRow]) -> dict[str, Symbol]:
+    latest: dict[str, tuple[date, str, str, str]] = {}
+    for row in rows:
+        current = latest.get(row.code)
+        isin = (row.isin or "").strip().upper()
+        sector = (row.sector or "").strip()
         if current is None or row.trade_date >= current[0]:
-            latest_name[row.code] = (row.trade_date, row.name or row.code)
-    existing = {symbol.code: symbol for symbol in Symbol.objects.filter(code__in=latest_name)}
+            latest[row.code] = (
+                row.trade_date,
+                row.name or row.code,
+                isin or ("" if current is None else current[2]),
+                sector or ("" if current is None else current[3]),
+            )
+        else:
+            if isin and not current[2]:
+                latest[row.code] = (current[0], current[1], isin, current[3])
+            if sector and not latest[row.code][3]:
+                kept = latest[row.code]
+                latest[row.code] = (kept[0], kept[1], kept[2], sector)
+    existing = {symbol.code: symbol for symbol in Symbol.objects.filter(code__in=latest)}
     created = []
     updated = []
-    for code, (_, name) in latest_name.items():
+    for code, (_, name, isin, sector) in latest.items():
         is_index = code.startswith("^")
         symbol = existing.get(code)
         if symbol is None:
-            symbol = Symbol(code=code, name=name, is_index=is_index)
+            symbol = Symbol(
+                code=code,
+                name=name,
+                is_index=is_index,
+                isin=isin or None,
+                sector=sector,
+            )
             created.append(symbol)
             existing[code] = symbol
-        elif symbol.name != name or symbol.is_index != is_index:
+            continue
+        fields = []
+        if symbol.name != name:
             symbol.name = name
+            fields.append("name")
+        if symbol.is_index != is_index:
             symbol.is_index = is_index
+            fields.append("is_index")
+        if isin and symbol.isin != isin:
+            symbol.isin = isin
+            fields.append("isin")
+        if sector and symbol.sector != sector:
+            symbol.sector = sector
+            fields.append("sector")
+        if fields:
             updated.append(symbol)
     if created:
         Symbol.objects.bulk_create(created)
-        existing = {symbol.code: symbol for symbol in Symbol.objects.filter(code__in=latest_name)}
+        existing = {symbol.code: symbol for symbol in Symbol.objects.filter(code__in=latest)}
     if updated:
-        Symbol.objects.bulk_update(updated, ["name", "is_index"])
+        Symbol.objects.bulk_update(updated, ["name", "is_index", "isin", "sector"])
     return existing
 
 

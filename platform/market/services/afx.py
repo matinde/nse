@@ -1,5 +1,6 @@
 import re
 import socket
+from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from zoneinfo import ZoneInfo
@@ -104,6 +105,7 @@ ISIN_TO_CODE = {
     "KE9930007092": "TRFC",
     "ZAE000060067": "GLD",
     "ZAE000246104": "SMWF",
+    "KE9940001986": "QMRT",
 }
 # Labels follow the NSE listed-companies sectors. NBK stays under Banking and
 # HBE under Commercial and services: both are in the ticker list above.
@@ -149,6 +151,7 @@ CODE_TO_SECTOR = {
     "LKL": "comm",
     "NBV": "comm",
     "NMG": "comm",
+    "QMRT": "comm",
     "SCAN": "comm",
     "SGL": "comm",
     "SMER": "comm",
@@ -205,12 +208,29 @@ class BoardParseError(Exception):
     pass
 
 
+@dataclass(frozen=True)
+class UnmappedQuote:
+    """A sector-table row whose ISIN has no ticker yet."""
+
+    isin: str
+    name: str
+    sector: str
+    day_price: Decimal
+    volume: int | None = None
+    change_pct: Decimal | None = None
+
+
 class SessionNotClosed(Exception):
     pass
 
 
-def fetch_nse_board():
-    """Latest closes from the NSE market-statistics sector tables."""
+def fetch_nse_board(code_for_isin=None):
+    """Latest closes from the NSE market-statistics sector tables.
+
+    ``code_for_isin`` maps an ISIN to a ticker. Rows with no ticker are
+    returned as unmapped quotes and are not stored as prices.
+    """
+    resolve = code_for_isin or (lambda isin: ISIN_TO_CODE.get(isin))
     page = requests.get(NSE_STATS_PAGE, headers={"User-Agent": USER_AGENT}, timeout=30)
     page.raise_for_status()
     nonce_match = re.search(r'"ajaxnonce":"([a-f0-9]+)"', page.text)
@@ -219,7 +239,9 @@ def fetch_nse_board():
     nonce = nonce_match.group(1)
     session_date = None
     quotes = []
+    unmapped = []
     seen = set()
+    seen_unmapped = set()
     for sector in NSE_SECTORS:
         response = requests.post(
             NSE_AJAX_URL,
@@ -234,14 +256,32 @@ def fetch_nse_board():
             if dated:
                 session_date = parse_date(dated.group(1))
         for name, isin, volume_text, price_text, change_text in _sector_rows(html):
-            code = ISIN_TO_CODE.get(isin.upper())
+            isin_code = "".join(isin.split()).upper()
             price = parse_num(price_text)
-            if code is None or code in seen or price is None or price <= 0:
+            if not isin_code or price is None or price <= 0:
                 continue
-            seen.add(code)
+            code = resolve(isin_code)
             change_pct = parse_num(change_text)
             volume = parse_volume(volume_text)
             short_name = _company_name(name)
+            if not code:
+                if isin_code in seen_unmapped:
+                    continue
+                seen_unmapped.add(isin_code)
+                unmapped.append(
+                    UnmappedQuote(
+                        isin=isin_code,
+                        name=short_name,
+                        sector=sector,
+                        day_price=price,
+                        volume=volume,
+                        change_pct=change_pct,
+                    )
+                )
+                continue
+            if code in seen:
+                continue
+            seen.add(code)
             quotes.append(
                 PriceRow(
                     trade_date=date.min,
@@ -253,6 +293,8 @@ def fetch_nse_board():
                     price_text=price_text.strip(),
                     change_pct_text=change_text.strip(),
                     volume_text=volume_text.strip(),
+                    isin=isin_code,
+                    sector=sector,
                 )
             )
     if session_date is None:
@@ -260,11 +302,11 @@ def fetch_nse_board():
     now = datetime.now(NAIROBI)
     if session_date == now.date() and (now.hour, now.minute) < (15, 30):
         raise SessionNotClosed(f"Nairobi time is {now:%H:%M}, before the 15:30 close.")
-    if not quotes:
+    if not quotes and not unmapped:
         raise BoardParseError("The NSE sector tables did not contain any prices.")
     for row in quotes:
         row.trade_date = session_date
-    return session_date, quotes
+    return session_date, quotes, unmapped
 
 
 def _sector_rows(html: str):

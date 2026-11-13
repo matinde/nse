@@ -9,6 +9,8 @@ class Symbol(models.Model):
     code = models.CharField(max_length=32, unique=True)
     name = models.CharField(max_length=255)
     is_index = models.BooleanField(default=False)
+    isin = models.CharField(max_length=16, unique=True, null=True, blank=True)
+    sector = models.CharField(max_length=16, blank=True)
 
     class Meta:
         ordering = ["code"]
@@ -50,6 +52,25 @@ class DailyPrice(models.Model):
 
     def __str__(self):
         return f"{self.symbol.code} {self.trade_date}"
+
+
+class PendingListing(models.Model):
+    """An NSE sector-table name that has no ticker yet."""
+
+    isin = models.CharField(max_length=16, unique=True)
+    name = models.CharField(max_length=255)
+    sector = models.CharField(max_length=16, blank=True)
+    ticker = models.CharField(max_length=32, blank=True)
+    session_date = models.DateField()
+    day_price = models.DecimalField(max_digits=14, decimal_places=4)
+    volume = models.BigIntegerField(null=True, blank=True)
+    change_pct = models.DecimalField(max_digits=12, decimal_places=4, null=True, blank=True)
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return f"{self.name} ({self.isin})"
 
 
 class IngestRun(models.Model):
