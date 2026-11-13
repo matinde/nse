@@ -37,7 +37,7 @@ def import_csvs() -> int:
 
 def fetch_session_closes() -> int:
     try:
-        session_date, quotes, unmapped = fetch_nse_board(_isin_to_code())
+        session_date, quotes, unmapped = fetch_nse_board(_isin_to_code().get)
     except BoardParseError as exc:
         run = IngestRun.objects.create(kind=IngestRun.KIND_BOARD)
         _finish(run, IngestRun.STATUS_FAILED, 0, str(exc))
@@ -182,7 +182,7 @@ def backfill_symbol_history(code: str) -> int:
 
     The NSE statistics tables publish the current session only.
     """
-    session_date, quotes, unmapped = fetch_nse_board(_isin_to_code())
+    session_date, quotes, unmapped = fetch_nse_board(_isin_to_code().get)
     chosen = [row for row in quotes if row.code == code]
     if not chosen:
         raise LookupError(f"{code} is not on the NSE sector tables for {session_date}.")

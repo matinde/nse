@@ -230,7 +230,12 @@ def fetch_nse_board(code_for_isin=None):
     ``code_for_isin`` maps an ISIN to a ticker. Rows with no ticker are
     returned as unmapped quotes and are not stored as prices.
     """
-    resolve = code_for_isin or (lambda isin: ISIN_TO_CODE.get(isin))
+    if code_for_isin is None:
+        resolve = ISIN_TO_CODE.get
+    elif isinstance(code_for_isin, dict):
+        resolve = code_for_isin.get
+    else:
+        resolve = code_for_isin
     page = requests.get(NSE_STATS_PAGE, headers={"User-Agent": USER_AGENT}, timeout=30)
     page.raise_for_status()
     nonce_match = re.search(r'"ajaxnonce":"([a-f0-9]+)"', page.text)
