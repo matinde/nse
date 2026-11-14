@@ -1,5 +1,5 @@
 import re
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from io import BytesIO
 
@@ -16,7 +16,6 @@ from market.services.afx import (
 )
 from market.services.rows import PriceRow, parse_num, parse_volume
 
-STATS_PAGE = "https://www.nse.co.ke/market-statistics/"
 LIST_URL = "https://www.nse.co.ke/wp-content/uploads/{name}"
 ISIN_RE = re.compile(r"\b((?:KE|UG)\d{10}|ZAE\d{9})\b")
 DATE_RE = re.compile(
@@ -94,24 +93,29 @@ def parse_equity_pdf(data: bytes, code_for_isin=None, named_date: date | None = 
 
 
 def _download_list() -> tuple[bytes, date]:
-    today = datetime.now(NAIROBI).date()
-    name = f"{today.day:02d}-{_MONTHS_ABBR[today.month]}-{today.strftime('%y')}.pdf"
-    response = requests.get(LIST_URL.format(name=name), headers={"User-Agent": USER_AGENT}, timeout=60)
-    if response.status_code == 404:
-        page = requests.get(STATS_PAGE, headers={"User-Agent": USER_AGENT}, timeout=60)
-        page.raise_for_status()
-        found = re.search(
-            r'href="(https://www\.nse\.co\.ke/wp-content/uploads/(\d{2}-[A-Z]{3}-\d{2})\.pdf)"[^>]*>\s*Download Daily Equity Price List',
-            page.text,
-        )
-        if found is None:
-            raise BoardParseError("The NSE statistics page has no daily equity price list.")
-        name = f"{found.group(2)}.pdf"
-        response = requests.get(found.group(1), headers={"User-Agent": USER_AGENT}, timeout=60)
-    response.raise_for_status()
-    if not response.content.startswith(b"%PDF"):
-        raise BoardParseError("The daily price list was not a PDF.")
-    return response.content, _date_from_name(name)
+    """The statistics page keeps an old download link. Request the file by date."""
+    for day in _candidate_days():
+        name = f"{day.day:02d}-{_MONTHS_ABBR[day.month]}-{day.strftime('%y')}.pdf"
+        response = requests.get(LIST_URL.format(name=name), headers={"User-Agent": USER_AGENT}, timeout=60)
+        if response.status_code == 404:
+            continue
+        response.raise_for_status()
+        if response.content.startswith(b"%PDF"):
+            return response.content, day
+    raise BoardParseError("The NSE daily equity price list is not available.")
+
+
+def _candidate_days() -> list[date]:
+    moment = datetime.now(NAIROBI)
+    day = moment.date()
+    if (moment.hour, moment.minute) < (15, 30):
+        day -= timedelta(days=1)
+    found = []
+    while len(found) < 6:
+        if day.weekday() < 5:
+            found.append(day)
+        day -= timedelta(days=1)
+    return found
 
 
 _MONTHS_ABBR = (
