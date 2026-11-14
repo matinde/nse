@@ -48,21 +48,21 @@ def fetch_equity_list(code_for_isin=None):
     That PDF is the published list. It includes new listings that the
     website sector tables still leave out.
     """
-    data = _download_list()
-    session_date, quotes, unmapped = parse_equity_pdf(data, code_for_isin)
+    data, named_date = _download_list()
+    session_date, quotes, unmapped = parse_equity_pdf(data, code_for_isin, named_date)
     now = datetime.now(NAIROBI)
     if session_date == now.date() and (now.hour, now.minute) < (15, 30):
         raise SessionNotClosed(f"Nairobi time is {now:%H:%M}, before the 15:30 close.")
     return session_date, quotes, unmapped
 
 
-def parse_equity_pdf(data: bytes, code_for_isin=None):
+def parse_equity_pdf(data: bytes, code_for_isin=None, named_date: date | None = None):
     resolve = code_for_isin or (lambda isin: None)
     images = _page_images(data)
     if not images:
         raise BoardParseError("The daily price list has no pages.")
     pages = [_ocr_words(image) for image in images]
-    session_date = _session_date(pages)
+    session_date = _session_date(pages) or named_date
     if session_date is None:
         raise BoardParseError("The daily price list has no session date.")
     quotes = []
@@ -93,24 +93,50 @@ def parse_equity_pdf(data: bytes, code_for_isin=None):
     return session_date, quotes, unmapped
 
 
-def _download_list() -> bytes:
+def _download_list() -> tuple[bytes, date]:
     today = datetime.now(NAIROBI).date()
-    name = f"{today.day:02d}-{today.strftime('%b').upper()}-{today.strftime('%y')}.pdf"
+    name = f"{today.day:02d}-{_MONTHS_ABBR[today.month]}-{today.strftime('%y')}.pdf"
     response = requests.get(LIST_URL.format(name=name), headers={"User-Agent": USER_AGENT}, timeout=60)
     if response.status_code == 404:
         page = requests.get(STATS_PAGE, headers={"User-Agent": USER_AGENT}, timeout=60)
         page.raise_for_status()
         found = re.search(
-            r'href="(https://www\.nse\.co\.ke/wp-content/uploads/\d{2}-[A-Z]{3}-\d{2}\.pdf)"[^>]*>\s*Download Daily Equity Price List',
+            r'href="(https://www\.nse\.co\.ke/wp-content/uploads/(\d{2}-[A-Z]{3}-\d{2})\.pdf)"[^>]*>\s*Download Daily Equity Price List',
             page.text,
         )
         if found is None:
             raise BoardParseError("The NSE statistics page has no daily equity price list.")
+        name = f"{found.group(2)}.pdf"
         response = requests.get(found.group(1), headers={"User-Agent": USER_AGENT}, timeout=60)
     response.raise_for_status()
     if not response.content.startswith(b"%PDF"):
         raise BoardParseError("The daily price list was not a PDF.")
-    return response.content
+    return response.content, _date_from_name(name)
+
+
+_MONTHS_ABBR = (
+    "",
+    "JAN",
+    "FEB",
+    "MAR",
+    "APR",
+    "MAY",
+    "JUN",
+    "JUL",
+    "AUG",
+    "SEP",
+    "OCT",
+    "NOV",
+    "DEC",
+)
+
+
+def _date_from_name(name: str) -> date:
+    match = re.search(r"(\d{2})-([A-Z]{3})-(\d{2})", name.upper())
+    if match is None:
+        raise BoardParseError("The daily price list file name has no date.")
+    month = _MONTHS_ABBR.index(match.group(2))
+    return date(2000 + int(match.group(3)), month, int(match.group(1)))
 
 
 def _page_images(data: bytes):
@@ -165,10 +191,10 @@ def _engine():
 
 def _session_date(pages):
     for words in pages:
-        for _x, _y, text in sorted(words, key=lambda item: item[1]):
-            match = DATE_RE.search(text)
-            if match:
-                return datetime.strptime(match.group(0), "%B %d, %Y").date()
+        top = [text for _x, y, text in words if y < 500]
+        match = DATE_RE.search(" ".join(top))
+        if match:
+            return datetime.strptime(match.group(0), "%B %d, %Y").date()
     return None
 
 
